@@ -1,0 +1,2 @@
+# Match .gitattributes and avoid carriage returns in multiline Rust strings.
+newline_style = "Unix"

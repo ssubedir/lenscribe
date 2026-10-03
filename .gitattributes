@@ -1,0 +1,2 @@
+# Keep formatter checks consistent on Windows, macOS, and Linux runners.
+* text=auto eol=lf

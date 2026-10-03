@@ -1,0 +1,30 @@
+:root {
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 15px;
+  --font-size-xl: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--canvas, #fafbf9);
+  color: var(--text, #253b35);
+  font:
+    var(--font-size-lg)/1.5 "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--focus, #2d806b);
+  outline-offset: 4px;
+}

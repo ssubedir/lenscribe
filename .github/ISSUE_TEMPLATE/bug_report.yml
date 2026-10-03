@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a problem with Lenscribe.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem with a small, reproducible example. Keep API keys and private image/text content out of the report.
+        For vulnerabilities, use [private security reporting](https://github.com/ssubedir/lenscribe/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Lenscribe version
+      description: Use the version in the sidebar, or the commit if running from source.
+      placeholder: v0.x.x or source commit
+    validations:
+      required: true
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version and architecture
+      placeholder: Windows 11 x64, macOS on Apple Silicon, or Linux distribution and version
+  - type: dropdown
+    id: installation
+    attributes:
+      label: How are you running Lenscribe?
+      options:
+        - GitHub release
+        - Built from source
+        - Development app
+        - Browser preview
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, and what did you expect?
+      description: Explain the actual behavior and the expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Configure ...
+        2. Add or change ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      description: For extraction problems, include the provider and model ID. Leave API keys out.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste the relevant sanitized lines from lenscribe.log. Log locations are in docs/development.md.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Screenshots or sample files
+      description: Optional screenshots or small sample images that you have permission to share.

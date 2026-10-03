@@ -1,0 +1,194 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to create or retry (for example v0.1.1; must match the app version)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate version and prepare release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.release.outputs.release-id }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.checkout.outputs.commit }}
+    steps:
+      - name: Choose release source
+        id: tag
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            if (!tag || tag !== tag.trim() || !/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
+              core.setFailed('Enter a version tag such as v0.1.1, including the v prefix.');
+              return;
+            }
+            let ref = `refs/tags/${tag}`;
+            try {
+              await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              if (context.eventName !== 'workflow_dispatch') {
+                core.setFailed(`Pushed tag ${tag} no longer exists on GitHub.`);
+                return;
+              }
+              ref = context.sha;
+            }
+            core.setOutput('tag', tag);
+            core.setOutput('ref', ref);
+      - uses: actions/checkout@v6
+        id: checkout
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Check tag and all version files
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: bun run release:version --check "$RELEASE_TAG"
+      - name: Check updater signing configuration
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Set the TAURI_SIGNING_PRIVATE_KEY repository secret from .release-signing/updater.key before releasing."
+            exit 1
+          fi
+      - name: Create tag and prepare draft release
+        id: release
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.checkout.outputs.commit }}
+        with:
+          script: |
+            const { ensureTag, prepare } = require('./scripts/github-release.cjs');
+            await ensureTag({ github, context, core, tag: process.env.RELEASE_TAG, commit: process.env.RELEASE_COMMIT });
+            await prepare({ github, context, core, tag: process.env.RELEASE_TAG });
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: Linux x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - name: macOS Apple Silicon
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS Intel
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file libssl-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Check generated types and frontend
+        run: bun run check
+      - name: Check formatting
+        run: bun run format:check
+      - name: Test frontend and release scripts
+        run: bun run test
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-features --locked
+      - name: Lint Rust
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Build and upload installers
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ad-hoc signing supports local installation on Apple Silicon.
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release-id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: true
+          tauriScript: bun run tauri
+          args: --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+          releaseAssetNamePattern: "[name]_[version]_[platform]_[arch][setup][ext]"
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
+
+  publish:
+    name: Publish complete release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        with:
+          script: |
+            const { publish } = require('./scripts/github-release.cjs');
+            await publish({ github, context, core, releaseId: process.env.RELEASE_ID, tag: process.env.RELEASE_TAG });

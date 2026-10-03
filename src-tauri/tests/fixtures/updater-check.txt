@@ -1,0 +1,1 @@
+Lenscribe updater signature verification fixture. This is not an installable artifact.

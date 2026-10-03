@@ -1,0 +1,6 @@
+node_modules
+build
+.svelte-kit
+.lenscribe
+src-tauri/target
+src/lib/generated

@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement to Lenscribe.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe your workflow and what is difficult or missing today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Explain the behavior you would like to see and how you would use it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Optional approaches you have considered or currently use.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Optional examples or screenshots using sample data.

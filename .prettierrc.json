@@ -1,0 +1,8 @@
+{
+  "plugins": ["prettier-plugin-svelte"],
+  "printWidth": 100,
+  "overrides": [
+    { "files": "*.svelte", "options": { "parser": "svelte" } },
+    { "files": "*.md", "options": { "proseWrap": "never" } }
+  ]
+}

@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light;
+}
+
+/* Component fallbacks preserve the existing light palette. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #131b17;
+  --sidebar: #18221c;
+  --surface: #1c2820;
+  --surface-soft: #202e25;
+  --surface-hover: #293b30;
+  --field-bg: #17241b;
+  --border: #344438;
+  --border-soft: #2c3b30;
+  --border-accent: #455d45;
+  --text: #e3ece1;
+  --text-secondary: #c7d8c7;
+  --muted: #a6bda6;
+  --subtle: #8ba38e;
+  --accent: #94b985;
+  --accent-hover: #a6c899;
+  --accent-text: #b9d5a9;
+  --on-accent: #172518;
+  --nav-active: #304832;
+  --nav-text: #daebcd;
+  --accent-soft: #243626;
+  --progress: #aac68c;
+  --progress-track: #3b5137;
+  --field-border-focus: #8bb18f;
+  --focus: #b8d6aa;
+  --switch-track: #46584a;
+  --switch-thumb: #e7efdc;
+  --warning-bg: #392d1c;
+  --warning-border: #695033;
+  --warning: #dfbb82;
+  --danger-bg: #3c2422;
+  --danger: #eeaa98;
+  --close-bg: #c84940;
+  --terminal-bg: #101912;
+  --terminal-border: #3d503b;
+  --terminal-toolbar: #1b2a1d;
+  --terminal-text: #d3e6c0;
+  --terminal-muted: #a3bf90;
+  --terminal-button-text: #d8e8c9;
+  --terminal-button-border: #4d6543;
+  --terminal-button-hover: #31472b;
+  --terminal-divider: #314230;
+  --terminal-strong: #f0f7e9;
+  --save-bg: #131b17f5;
+  --selected-shadow: #00000020;
+  --chrome: #18221c;
+  scrollbar-color: #4d6350 #18221c;
+}
+
+:root[data-theme="dark"] .brand-mark img,
+:root[data-theme="dark"] .titlebar-brand img {
+  filter: brightness(1.3);
+}
