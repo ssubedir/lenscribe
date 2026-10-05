@@ -243,10 +243,11 @@ pub async fn list_files(
     folder_id: i64,
     query: String,
     offset: usize,
+    fuzzy: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<lenscribe_core::FilePage, String> {
     run_core(state.core.clone(), move |core| {
-        core.list_files(folder_id, &query, offset)
+        core.find_files(folder_id, &query, offset, fuzzy.unwrap_or(false))
     })
     .await
 }

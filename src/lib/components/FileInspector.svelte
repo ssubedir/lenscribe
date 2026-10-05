@@ -29,6 +29,7 @@
   let files = $state<FileRecord[]>([]);
   let total = $state(0);
   let query = $state(untrack(() => initialPath));
+  let appliedQuery = $state(untrack(() => initialPath));
   let offset = $state(0);
   let selected = $state<FileDetails | null>(null);
   let image = $state("");
@@ -85,11 +86,15 @@
 
   async function load(reset = false, quiet = false) {
     if (textDirty || working) return;
-    if (reset) offset = 0;
+    if (!quiet) error = "";
+    if (reset) {
+      offset = 0;
+      appliedQuery = query;
+    }
     loading = true;
     const request = ++listGeneration;
     try {
-      const result = await client.listFiles(folderId, query, offset);
+      const result = await client.listFiles(folderId, appliedQuery, offset, true);
       if (!alive || request !== listGeneration || textDirty || working) return;
       files = result.files;
       total = result.total;
@@ -98,13 +103,14 @@
         if (!selected || selected.id !== next.id || selected.recordHash !== next.recordHash)
           await select(next, quiet);
       } else {
+        generation++;
         selected = null;
         image = "";
         editing = false;
         notice = "";
       }
     } catch (cause) {
-      if (alive) error = String(cause);
+      if (alive && request === listGeneration) error = String(cause);
     } finally {
       if (alive && request === listGeneration) loading = false;
     }
@@ -197,15 +203,15 @@
           void load(true);
         }}
       >
-        <label for="filename-filter">Find a file</label>
+        <label for="file-search">Find an image</label>
         <div class="filter-row">
           <input
-            id="filename-filter"
+            id="file-search"
             type="search"
             bind:value={query}
-            placeholder="Filter filenames…"
+            placeholder="Search names & text…"
             disabled={textDirty || working}
-          /><button aria-label="Filter files" disabled={textDirty || working}
+          /><button aria-label="Search files" disabled={textDirty || working}
             ><Icon name="search" size={16} /></button
           >
         </div>

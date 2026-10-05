@@ -21,7 +21,7 @@ export interface AppClient {
   retry(): Promise<DaemonStatus>;
   chooseFolder(): Promise<string | null>;
   onError(callback: (message: string) => void): Promise<() => void>;
-  listFiles(folderId: number, query: string, offset: number): Promise<FilePage>;
+  listFiles(folderId: number, query: string, offset: number, fuzzy?: boolean): Promise<FilePage>;
   fileDetails(fileId: number): Promise<FileDetails>;
   filePreview(fileId: number): Promise<string>;
   editFile(file: FileRecord, text: string): Promise<{ file: FileDetails; message: string }>;

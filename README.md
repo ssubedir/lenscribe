@@ -62,7 +62,7 @@ This README describes the source tree. To use changes added since the latest rel
 2. Open **AI Extraction** and choose your provider.
 3. Select an image-capable model with **Fetch Models**, or enter its exact model ID manually. Enter an API key when your provider requires one.
 4. Enable **Automatic text extraction** and save. Lenscribe processes pending images and watches for new arrivals.
-5. Use **Overview** to see progress, or **Watched Folders → Inspect Files** to preview an image, read or edit its text, and retry or reprocess it.
+5. Use **Overview** to see progress, or **Watched Folders → Inspect Files** to search filenames and extracted text, preview an image, edit its text, and retry or reprocess it. Search also finds word prefixes and common typos automatically.
 
 Automatic extraction is off until you enable it. Scanning by itself indexes files and existing text without sending images to a model.
 

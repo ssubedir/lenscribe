@@ -13,6 +13,10 @@ impl<'a> SearchRepository<'a> {
         Self { connection }
     }
 
+    pub(super) fn inspector_expression(&self, text: &str) -> Result<Option<String>> {
+        fuzzy::expression(self.connection, text)
+    }
+
     pub fn query(
         &self,
         text: &str,
@@ -54,3 +58,4 @@ impl<'a> SearchRepository<'a> {
         Ok(hits)
     }
 }
+mod fuzzy;

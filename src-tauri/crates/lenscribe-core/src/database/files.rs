@@ -1,10 +1,11 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 
 use crate::{Error, FileDetails, FilePage, FileRecord, Result};
 
 use super::{
     folders::FolderRepository,
     rows::{file_row, FILE_COLUMNS},
+    search::SearchRepository,
 };
 
 pub(crate) struct FileRepository<'a> {
@@ -66,29 +67,50 @@ impl<'a> FileRepository<'a> {
         Ok(files)
     }
 
-    pub fn list(&self, folder_id: i64, query: &str, offset: usize) -> Result<FilePage> {
+    pub fn list(
+        &self,
+        folder_id: i64,
+        query: &str,
+        offset: usize,
+        fuzzy: bool,
+    ) -> Result<FilePage> {
         FolderRepository::new(self.connection).get(folder_id)?;
         if query.len() > 1024 {
-            return Err(Error::InvalidInput(
-                "filename filter exceeds 1024 bytes".into(),
-            ));
+            return Err(Error::InvalidInput("file search exceeds 1024 bytes".into()));
+        }
+        let query = query.trim();
+        let mut values = vec![Value::Integer(folder_id), Value::Text(query.into())];
+        let mut matches = String::from(
+            "instr(lower(f.relative_path), lower(?2)) > 0
+             OR instr(lower(coalesce(f.text, '')), lower(?2)) > 0",
+        );
+        if fuzzy {
+            if let Some(expression) =
+                SearchRepository::new(self.connection).inspector_expression(query)?
+            {
+                values.push(Value::Text(expression));
+                matches
+                    .push_str(" OR f.id IN (SELECT rowid FROM files_fts WHERE files_fts MATCH ?3)");
+            }
         }
         let total: i64 = self.connection.query_row(
-            "SELECT count(*) FROM files
-             WHERE folder_id = ?1 AND instr(lower(relative_path), lower(?2)) > 0",
-            params![folder_id, query],
+            &format!("SELECT count(*) FROM files f WHERE f.folder_id = ?1 AND ({matches})"),
+            params_from_iter(&values),
             |row| row.get(0),
         )?;
+        values.push(Value::Integer(i64::try_from(offset).unwrap_or(i64::MAX)));
         let mut statement = self.connection.prepare(&format!(
             "SELECT {FILE_COLUMNS} FROM files f
-             WHERE f.folder_id = ?1 AND instr(lower(f.relative_path), lower(?2)) > 0
-             ORDER BY f.relative_path LIMIT 50 OFFSET ?3",
+             WHERE f.folder_id = ?1 AND ({matches})
+             ORDER BY CASE
+                WHEN instr(lower(f.relative_path), lower(?2)) > 0 THEN 0
+                WHEN instr(lower(coalesce(f.text, '')), lower(?2)) > 0 THEN 1
+                ELSE 2 END, f.relative_path
+             LIMIT 50 OFFSET ?{}",
+            values.len(),
         ))?;
         let files = statement
-            .query_map(
-                params![folder_id, query, i64::try_from(offset).unwrap_or(i64::MAX)],
-                file_row,
-            )?
+            .query_map(params_from_iter(&values), file_row)?
             .collect::<rusqlite::Result<_>>()?;
         Ok(FilePage {
             files,

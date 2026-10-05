@@ -463,6 +463,73 @@ fn inspector_filename_filter_is_literal_and_pages_large_folders() {
 }
 
 #[test]
+fn inspector_text_search_follows_edits_removals_and_restarts() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("images");
+    fs::create_dir(&root).unwrap();
+    png(&root.join("note.png"), [1, 2, 3]);
+    let database = temp.path().join("index.sqlite");
+    let core = Core::open(&database).unwrap();
+    let report = core.scan_folder(&root).unwrap();
+    let file = core.snapshot(report.folder.id).unwrap().files.remove(0);
+    let processed = core
+        .attach_text(
+            file.folder_id,
+            &file.relative_path,
+            &file.image_hash,
+            "coffee receipt",
+            "fixture/v1",
+        )
+        .unwrap();
+    assert_eq!(
+        core.list_files(file.folder_id, "coffee", 0).unwrap().total,
+        1
+    );
+    assert_eq!(
+        core.find_files(file.folder_id, "cofee", 0, true)
+            .unwrap()
+            .total,
+        1
+    );
+    core.edit_file(
+        file.id,
+        &file.image_hash,
+        &processed.file.record_hash,
+        "croissant invoice",
+    )
+    .unwrap();
+    assert_eq!(
+        core.find_files(file.folder_id, "cofee", 0, true)
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        core.find_files(file.folder_id, "croisant", 0, true)
+            .unwrap()
+            .total,
+        1
+    );
+    drop(core);
+    let core = Core::open(database).unwrap();
+    assert_eq!(
+        core.find_files(file.folder_id, "croisant", 0, true)
+            .unwrap()
+            .total,
+        1
+    );
+    fs::remove_file(root.join("note.png")).unwrap();
+    core.scan_paths(file.folder_id, &[root.join("note.png")])
+        .unwrap();
+    assert_eq!(
+        core.find_files(file.folder_id, "croisant", 0, true)
+            .unwrap()
+            .total,
+        0
+    );
+}
+
+#[test]
 fn version_one_database_migration_preserves_text_and_seeds_the_reuse_cache() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("images");

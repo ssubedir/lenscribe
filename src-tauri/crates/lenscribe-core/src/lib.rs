@@ -192,11 +192,21 @@ impl Core {
     }
 
     pub fn list_files(&self, folder_id: i64, query: &str, offset: usize) -> Result<FilePage> {
+        self.find_files(folder_id, query, offset, false)
+    }
+
+    pub fn find_files(
+        &self,
+        folder_id: i64,
+        query: &str,
+        offset: usize,
+        fuzzy: bool,
+    ) -> Result<FilePage> {
         self.database
             .lock()
             .map_err(|_| Error::Poisoned)?
             .files()
-            .list(folder_id, query, offset)
+            .list(folder_id, query, offset, fuzzy)
     }
 
     pub fn extraction_jobs(&self, folder_id: i64) -> Result<Vec<ExtractionJob>> {

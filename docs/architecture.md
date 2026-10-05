@@ -109,6 +109,8 @@ Fetch Models requests provider catalogs or installed Ollama models, excludes mod
 
 SQLite FTS5 searches filenames and extracted text. Query terms are escaped as literals and combined with AND; results contain ranked snippets and are limited to 100. The HTTP layer runs blocking database operations off the async request thread. Its plain-text endpoint returns 404 when text is missing.
 
+The file inspector searches literal substrings in filenames and extracted text within the selected folder, with 50 results per page. Fuzzy matching runs automatically, adding indexed word prefixes and up to one insertion, deletion, substitution, or adjacent swap for words of four or more characters. All query words must match the same file; exact filename matches precede exact text matches, followed by fuzzy matches. A temporary FTS5 vocabulary view follows the existing index, so edits, scans, and removals immediately affect searches without another persistent index or model requests. Fuzzy queries support up to eight words of 64 characters each, scan at most 50,000 candidate dictionary words, and expand each word to at most 32 alternatives. Oversized queries report an error so users can narrow the search. Semantic search and embeddings are not included.
+
 The settings controller keeps live status separate from the editable draft. Polling cannot erase unsaved changes. Save applies configuration in Rust; Discard restores saved settings. Aggregate progress uses a grouped database query, including successful empty transcriptions.
 
 The preview adapter is loaded only in explicit development preview mode. Its files, edits, images, and settings stay in memory. Native dialogs, command invocations, and model requests belong to the desktop adapter.

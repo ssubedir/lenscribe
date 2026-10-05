@@ -31,8 +31,8 @@ export const listFolders = () => invoke<FolderRecord[]>("list_folders");
 export const folderSnapshot = (folderId: number) =>
   invoke<FolderSnapshot>("folder_snapshot", { folderId });
 export const fileDetails = (fileId: number) => invoke<FileDetails>("file_details", { fileId });
-export const listFiles = (folderId: number, query = "", offset = 0) =>
-  invoke<FilePage>("list_files", { folderId, query, offset });
+export const listFiles = (folderId: number, query = "", offset = 0, fuzzy = false) =>
+  invoke<FilePage>("list_files", { folderId, query, offset, fuzzy });
 export const filePreview = (fileId: number) => invoke<string>("file_preview", { fileId });
 export const queueFile = (file: FileRecord, force: boolean) =>
   invoke<DaemonStatus>("queue_file", { fileId: file.id, expectedImageHash: file.imageHash, force });
