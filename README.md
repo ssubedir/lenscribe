@@ -3,6 +3,13 @@
 </p>
 
 <h1 align="center">Lenscribe</h1>
+
+<p align="center">
+  <strong>Make your images searchable with the tools you already use.</strong>
+</p>
+
+<p align="center">Lenscribe watches your folders, uses a vision model to extract text from your images, and saves it <strong>inside each image file</strong>. The text stays with the image, so you can search and read it with familiar tools like <code>grep</code>, <code>cat</code>, and PowerShell's <code>Get-Content</code>, or access it through a local API with <code>curl</code>.</p>
+
 <p align="center">
   <a href="https://github.com/ssubedir/lenscribe/releases/latest">
     <img src="https://img.shields.io/github/v/release/ssubedir/lenscribe?label=version&amp;color=2e7564" alt="Latest release version" />
@@ -15,11 +22,13 @@
   </a>
 </p>
 
-**Make your images searchable with the tools you already use.**
+<p align="center"><a href="https://github.com/ssubedir/lenscribe/releases">Download</a> · <a href="#getting-started">Getting started</a> · <a href="#search-your-images">Search your images</a> · <a href="#development">Development</a> · <a href="https://github.com/ssubedir/lenscribe/issues">Report an issue</a></p>
 
-Lenscribe watches your folders, uses a vision model to extract text from your images, and saves it **inside each image file**. The text stays with the image, so you can search and read it with familiar tools like `grep`, `cat`, and PowerShell's `Get-Content`, or access it through a local API with `curl`.
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="1000" alt="Lenscribe Overview with image counts, processing status, and watched folders" />
+</p>
 
-[Download](https://github.com/ssubedir/lenscribe/releases) · [Getting started](#getting-started) · [Search your images](#search-your-images) · [Development](#development) · [Report an issue](https://github.com/ssubedir/lenscribe/issues)
+---
 
 ## What it does
 
