@@ -2628,7 +2628,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lenscribe"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "base64 0.22.1",
  "lenscribe-core",
@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "lenscribe-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
