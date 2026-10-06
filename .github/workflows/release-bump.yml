@@ -1,0 +1,59 @@
+name: Release bump
+run-name: Bump version to ${{ inputs.version }} on ${{ github.ref_name }}
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New app version without the v prefix (for example 0.1.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bump-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump and commit version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      TARGET_REF: ${{ github.ref }}
+      TARGET_REF_TYPE: ${{ github.ref_type }}
+    steps:
+      - name: Require a branch
+        run: |
+          if [ "$TARGET_REF_TYPE" != "branch" ]; then
+            echo "Select a branch to bump; tags cannot be updated."
+            exit 1
+          fi
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Update app version
+        run: bun run release:version "$RELEASE_VERSION"
+      - name: Verify all version files
+        run: bun run release:version --check "v$RELEASE_VERSION"
+      - name: Commit and push version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/crates/Cargo.toml src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            printf 'Version is already **%s**; no commit needed.\n' "$RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "chore: bump version to $RELEASE_VERSION"
+          git push origin "HEAD:$TARGET_REF"
+          printf 'Bumped **%s** on **%s**. Run the **Release** workflow with tag **v%s** when ready.\n' "$RELEASE_VERSION" "$TARGET_REF" "$RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"

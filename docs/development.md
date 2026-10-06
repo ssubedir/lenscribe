@@ -157,14 +157,18 @@ The [Release workflow](../.github/workflows/release.yml) builds and validates Wi
 
 ### Prepare a version
 
-For example, to prepare version `0.2.0`:
+Open **Actions → Release bump → Run workflow** for the [Release bump workflow](../.github/workflows/release-bump.yml), select the branch to update, and enter a version such as `0.1.3` without the `v` prefix. The workflow must be merged into the default branch before the manual trigger appears.
+
+The workflow updates `package.json`, `src-tauri/tauri.conf.json`, both Rust package manifests, and the two workspace lockfile entries. It verifies that every version matches the requested tag, then commits and pushes directly to the selected branch using the automatic `GITHUB_TOKEN`. No PR is opened. An unchanged version creates no commit. Branch protection still applies, and a concurrent branch update causes the push to fail rather than overwrite changes; rerun the workflow if needed.
+
+To prepare the version locally instead:
 
 ```sh
-bun run release:version 0.2.0
-bun run release:version --check v0.2.0
+bun run release:version x.x.x
+bun run release:version --check vx.x.x
 ```
 
-The script updates `package.json`, `src-tauri/tauri.conf.json`, both Rust package manifests, and the two workspace lockfile entries. It preserves dependency versions and surrounding formatting. Commit and push those changes.
+Commit and push local version changes. After either approach, start the **Release** workflow with the matching tag, such as `v0.1.3`, to build and publish the release.
 
 ### Configure signing
 
