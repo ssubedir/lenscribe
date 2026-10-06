@@ -33,6 +33,7 @@ walkdir = "2"
 ts-rs = { version = "12", optional = true, features = ["no-serde-warnings"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 http-body-util = "0.1"
 image-webp = "0.2.4"
 png = "0.18"

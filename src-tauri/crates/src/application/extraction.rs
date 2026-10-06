@@ -262,7 +262,10 @@ async fn worker(
         .map_err(|_| Error::Poisoned)?
         .recovery_state(&recovery)?;
     let mut failures: BTreeMap<JobKey, Failure>;
-    let endpoint = Arc::new(tokio::sync::Mutex::new(endpoint));
+    let endpoint = Arc::new(tokio::sync::Mutex::new(EndpointRuntime::new(
+        endpoint,
+        now_ms(),
+    )));
     let mut tasks = JoinSet::new();
     let mut active = BTreeSet::new();
     let mut duplicate_gates: BTreeMap<String, Weak<tokio::sync::Mutex<()>>> = BTreeMap::new();
@@ -317,7 +320,7 @@ async fn worker(
             })
             .collect();
         publish_failures(&status, &failures);
-        let endpoint_state = endpoint.lock().await.clone();
+        let endpoint_state = endpoint.lock().await.state.clone();
         if let Some(error) = endpoint_state.blocked_error {
             if let Ok(mut status) = status.lock() {
                 status.phase = ExtractionPhase::NeedsConfiguration;
@@ -440,7 +443,7 @@ async fn worker(
                 let retry_at_ms =
                     (error.retryable && attempts < 5).then(|| now_ms() + delay * 1000);
                 let mut state = endpoint.lock().await;
-                let mut next_state = state.clone();
+                let mut next_state = state.state.clone();
                 if error.retryable {
                     next_state.retry_at_ms = Some(
                         next_state
@@ -468,7 +471,7 @@ async fn worker(
                     continue;
                 }
                 log::warn!("Extraction failed for file {}: attempt={}; retry_seconds={:?}; blocks_queue={}: {}", job.file.id, attempts, retry_at_ms.map(|_| delay), error.blocks_queue, error.message);
-                *state = next_state;
+                state.state = next_state;
                 failures.insert(
                     key,
                     Failure {
@@ -488,9 +491,36 @@ struct JobContext {
     client: Arc<dyn VisionProvider>,
     gate: Arc<tokio::sync::Mutex<()>>,
     cancelled: Arc<AtomicBool>,
-    endpoint: Arc<tokio::sync::Mutex<crate::ports::index::EndpointState>>,
+    endpoint: Arc<tokio::sync::Mutex<EndpointRuntime>>,
     recovery: String,
     requests_per_minute: u32,
+}
+
+// Keep wall-clock deadlines for restart recovery and use monotonic time for live pacing.
+struct EndpointRuntime {
+    state: crate::ports::index::EndpointState,
+    request_wait: Duration,
+    reserved_at: tokio::time::Instant,
+}
+
+impl EndpointRuntime {
+    fn new(state: crate::ports::index::EndpointState, now: u64) -> Self {
+        Self {
+            request_wait: Duration::from_millis(state.next_request_ms.saturating_sub(now)),
+            reserved_at: tokio::time::Instant::now(),
+            state,
+        }
+    }
+
+    fn wait_time(&self, now: u64, requests_per_minute: u32) -> Duration {
+        let retry = Duration::from_millis(self.state.retry_at_ms.unwrap_or(0).saturating_sub(now));
+        let pacing = if requests_per_minute == 0 {
+            Duration::ZERO
+        } else {
+            self.request_wait.saturating_sub(self.reserved_at.elapsed())
+        };
+        retry.max(pacing)
+    }
 }
 
 async fn reserve_request(context: &JobContext) -> std::result::Result<bool, ExtractionError> {
@@ -499,36 +529,35 @@ async fn reserve_request(context: &JobContext) -> std::result::Result<bool, Extr
             return Ok(false);
         }
         let mut state = context.endpoint.lock().await;
-        if state.blocked_error.is_some() {
+        if state.state.blocked_error.is_some() {
             return Ok(false);
         }
         let now = now_ms();
-        let due = state
-            .retry_at_ms
-            .unwrap_or(0)
-            .max(if context.requests_per_minute == 0 {
+        let wait = state.wait_time(now, context.requests_per_minute);
+        if wait.is_zero() {
+            let interval_ms = if context.requests_per_minute == 0 {
                 0
             } else {
-                state.next_request_ms
-            });
-        if due <= now {
-            state.next_request_ms = now
-                + if context.requests_per_minute == 0 {
-                    0
-                } else {
-                    60_000_u64.div_ceil(context.requests_per_minute as u64)
-                };
+                60_000_u64.div_ceil(context.requests_per_minute as u64)
+            };
+            let mut next_state = state.state.clone();
+            next_state.next_request_ms = now + interval_ms;
             context
                 .core
                 .index
                 .lock()
                 .map_err(|_| ExtractionError::permanent("Cannot reserve an extraction request"))?
-                .save_endpoint(&context.recovery, &state)
+                .save_endpoint(&context.recovery, &next_state)
                 .map_err(|_| ExtractionError::permanent("Cannot persist request pacing"))?;
+            state.state = next_state;
+            // Start the live interval after the durable write. A slow sync must not
+            // spend the next request's delay before this request can be sent.
+            state.reserved_at = tokio::time::Instant::now();
+            state.request_wait = Duration::from_millis(interval_ms);
             return Ok(true);
         }
         drop(state);
-        tokio::time::sleep(Duration::from_millis((due - now).min(500))).await;
+        tokio::time::sleep(wait.min(Duration::from_millis(500))).await;
     }
 }
 
@@ -665,7 +694,151 @@ fn publish_failures(status: &Mutex<ExtractionStatus>, failures: &BTreeMap<JobKey
 
 #[cfg(test)]
 mod tests {
-    use super::ExtractionPhase;
+    use super::{now_ms, reserve_request, EndpointRuntime, ExtractionPhase, JobContext, Ordering};
+    use crate::{ports::index::EndpointState, settings::ExtractionSettings, Core};
+    use std::{sync::Arc, time::Duration};
+    use tokio::{task::JoinSet, time::Instant};
+
+    fn pacing_context(
+        requests_per_minute: u32,
+        state: EndpointState,
+        now: u64,
+    ) -> (tempfile::TempDir, Arc<JobContext>) {
+        let directory = tempfile::tempdir().unwrap();
+        let core = Arc::new(Core::open(directory.path().join("index.wedb")).unwrap());
+        let client = core
+            .vision
+            .create(ExtractionSettings {
+                enabled: true,
+                model: "pacing-fixture".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        core.index
+            .lock()
+            .unwrap()
+            .save_endpoint("pacing-fixture", &state)
+            .unwrap();
+        let context = Arc::new(JobContext {
+            core,
+            client,
+            gate: Arc::new(tokio::sync::Mutex::new(())),
+            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            endpoint: Arc::new(tokio::sync::Mutex::new(EndpointRuntime::new(state, now))),
+            recovery: "pacing-fixture".into(),
+            requests_per_minute,
+        });
+        (directory, context)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_requests_are_paced_by_the_shared_rate_limit() {
+        let (_directory, context) = pacing_context(300, EndpointState::default(), now_ms());
+        let mut requests = JoinSet::new();
+        let started = Instant::now();
+        for _ in 0..3 {
+            let context = context.clone();
+            requests.spawn(async move {
+                assert!(reserve_request(&context).await.unwrap());
+                Instant::now()
+            });
+        }
+        let first = requests.join_next().await.unwrap().unwrap();
+        assert_eq!(first, started);
+        assert!(requests.try_join_next().is_none());
+        for index in 1..=2 {
+            tokio::time::advance(Duration::from_millis(199)).await;
+            tokio::task::yield_now().await;
+            assert!(requests.try_join_next().is_none());
+            tokio::time::advance(Duration::from_millis(1)).await;
+            let next = requests.join_next().await.unwrap().unwrap();
+            assert_eq!(
+                next.duration_since(first),
+                Duration::from_millis(index * 200)
+            );
+        }
+        let (_, saved) = context
+            .core
+            .index
+            .lock()
+            .unwrap()
+            .recovery_state(&context.recovery)
+            .unwrap();
+        assert_eq!(
+            saved.next_request_ms,
+            context.endpoint.lock().await.state.next_request_ms
+        );
+        assert_ne!(saved.next_request_ms, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restored_request_pacing_waits_before_the_first_admission() {
+        let (_directory, context) = pacing_context(
+            300,
+            EndpointState {
+                next_request_ms: 1_600,
+                ..Default::default()
+            },
+            1_000,
+        );
+        let started = Instant::now();
+        let waiting = tokio::spawn(async move {
+            assert!(reserve_request(&context).await.unwrap());
+            Instant::now()
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(599)).await;
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(
+            waiting.await.unwrap().duration_since(started),
+            Duration::from_millis(600)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_or_blocked_requests_do_not_advance_durable_pacing() {
+        let saved = EndpointState {
+            next_request_ms: 60_000,
+            ..Default::default()
+        };
+        let (_directory, context) = pacing_context(1, saved.clone(), 0);
+        let waiting_context = context.clone();
+        let waiting = tokio::spawn(async move { reserve_request(&waiting_context).await.unwrap() });
+        tokio::task::yield_now().await;
+        context.cancelled.store(true, Ordering::Relaxed);
+        tokio::time::advance(Duration::from_millis(500)).await;
+        assert!(!waiting.await.unwrap());
+        context.cancelled.store(false, Ordering::Relaxed);
+        context.endpoint.lock().await.state.blocked_error = Some("Authentication failed".into());
+        assert!(!reserve_request(&context).await.unwrap());
+        let (_, after) = context
+            .core
+            .index
+            .lock()
+            .unwrap()
+            .recovery_state(&context.recovery)
+            .unwrap();
+        assert_eq!(after.next_request_ms, saved.next_request_ms);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disabling_the_limit_bypasses_saved_pacing() {
+        let (_directory, context) = pacing_context(
+            0,
+            EndpointState {
+                next_request_ms: 60_000,
+                ..Default::default()
+            },
+            0,
+        );
+        let started = Instant::now();
+        for _ in 0..3 {
+            assert!(reserve_request(&context).await.unwrap());
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    }
 
     #[test]
     fn phases_preserve_the_frontend_wire_values() {
