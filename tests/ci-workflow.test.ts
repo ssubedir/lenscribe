@@ -1,6 +1,10 @@
 import { expect, mock, test } from "bun:test";
 
-type Step = { uses?: string; with?: Record<string, string>; env?: Record<string, string> };
+type Step = {
+  uses?: string;
+  with?: Record<string, string | boolean | number>;
+  env?: Record<string, string>;
+};
 type Job = {
   needs?: string | string[];
   if?: string;
@@ -17,7 +21,7 @@ const workflow = Bun.YAML.parse(
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 function scriptFor(job: string) {
   const script = workflow.jobs[job].steps.find((step) => step.with?.script)?.with?.script;
-  if (!script) throw new Error(`CI ${job} script is missing.`);
+  if (typeof script !== "string" || !script) throw new Error(`CI ${job} script is missing.`);
   return new AsyncFunction("github", "context", "core", "process", script);
 }
 const selectSource = scriptFor("source");
