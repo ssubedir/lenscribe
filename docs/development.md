@@ -39,7 +39,9 @@ Installer builds use `bun run tauri build` and require the matching updater sign
 
 ## Checks
 
-The [CI workflow](../.github/workflows/ci.yml) runs only when started manually from **Actions → CI → Run workflow**. It checks generated types, frontend types, code and documentation formatting, tests, and the frontend build. After those pass, it tests and lints Rust and builds the native app on Windows x64, Linux x64, macOS Apple Silicon, and macOS Intel. Native CI builds use `--debug --no-bundle`, so they require no installer or updater signing keys. Newer runs cancel older runs for the same branch.
+The [CI workflow](../.github/workflows/ci.yml) runs manually. From a pull request's conversation page, post a new comment containing only `/ci`. Repository maintainers with write access can use this command; it tests the PR's current head commit, including PRs from forks, and reports a **CI / Manual PR** status on that commit with a link to the run. Each new `/ci` comment resolves the latest commit, and all jobs in that run test the same pinned commit. Post `/ci` again after pushing changes. The command becomes available after this workflow is merged into the default branch. Opening a PR or pushing commits does not start CI automatically.
+
+For a repository branch, use **Actions → CI → Run workflow** and select the branch. CI checks generated types, frontend types, code and documentation formatting, tests, and the frontend build. After those pass, it tests and lints Rust and builds the native app on Windows x64, Linux x64, macOS Apple Silicon, and macOS Intel. Native CI builds use `--debug --no-bundle`, so they require no installer or updater signing keys. Newer jobs cancel older jobs for the same branch or PR. Build jobs have read-only repository access; only separate API jobs can report commit statuses, and PR runs do not save shared Rust caches.
 
 Run from the repository root:
 

@@ -45,6 +45,6 @@ Use `bun run format` for frontend code and workflow files, and `cargo fmt --mani
 
 Open a pull request against `main`. Explain the problem, resulting behavior, and validation performed. Link the relevant issue and include screenshots for visible UI changes, using sample data. Note compatibility changes or database migrations, and say which checks you could not run.
 
-CI runs manually. A maintainer can start **Actions → CI → Run workflow** on a repository branch; do not assume opening a pull request starts checks automatically.
+CI runs manually. A maintainer with repository write access can post `/ci` as a new comment on a pull request's conversation page to test its latest commit. Results appear as **CI / Manual PR** with a link to the run. Use a new `/ci` comment after pushing changes. Maintainers can also start **Actions → CI → Run workflow** on a repository branch. Opening a pull request or pushing commits does not start checks automatically.
 
 Contributions are provided under the project's [MIT license](LICENSE).
