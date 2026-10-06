@@ -9,35 +9,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
-use crate::{Core, Error, Result, ScanReport};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct WatchStatus {
-    pub folder_id: i64,
-    pub path: String,
-    pub last_error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct WatchFailure {
-    pub folder_id: i64,
-    pub error: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
-#[serde(tag = "type", content = "data", rename_all = "camelCase")]
-pub enum WatchEvent {
-    Updated(ScanReport),
-    Failed(WatchFailure),
-}
+use crate::{
+    domain::watch::{WatchEvent, WatchFailure, WatchStatus},
+    ports::watch::{WatchCallback, WatchTarget, Watcher},
+    Error, Result,
+};
 
 pub(crate) struct FolderWatch {
     _watcher: RecommendedWatcher,
@@ -48,7 +26,7 @@ pub(crate) struct FolderWatch {
 
 impl FolderWatch {
     pub fn start(
-        core: Weak<Core>,
+        core: Weak<dyn WatchTarget>,
         folder_id: i64,
         root: PathBuf,
         on_event: Arc<dyn Fn(WatchEvent) + Send + Sync>,
@@ -203,5 +181,30 @@ impl Drop for FolderWatch {
                 let _ = thread.join();
             }
         }
+    }
+}
+
+pub struct NotifyWatcher;
+impl Watcher for NotifyWatcher {
+    fn start(
+        &self,
+        target: Weak<dyn WatchTarget>,
+        folder: i64,
+        root: PathBuf,
+        on_event: WatchCallback,
+    ) -> Result<Box<dyn crate::ports::watch::FolderWatch>> {
+        Ok(Box::new(FolderWatch::start(
+            target, folder, root, on_event,
+        )?))
+    }
+}
+impl crate::ports::watch::FolderWatch for FolderWatch {
+    fn status(&self) -> Result<WatchStatus> {
+        FolderWatch::status(self)
+    }
+}
+impl From<notify::Error> for Error {
+    fn from(error: notify::Error) -> Self {
+        Self::Watch(error.to_string())
     }
 }

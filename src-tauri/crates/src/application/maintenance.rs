@@ -5,29 +5,26 @@ use crate::{Core, Error, MaintenanceReport, MaintenanceStatus, Result, ScanIssue
 
 impl Core {
     pub fn maintenance_status(&self) -> Result<MaintenanceStatus> {
-        self.database
+        self.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .maintenance()
-            .status()
+            .maintenance_status()
     }
 
     /// Export a consistent, checksummed logical snapshot of the canonical records.
     /// Existing destinations are never overwritten.
     pub fn backup_database(&self, destination: impl AsRef<Path>) -> Result<()> {
-        self.database
+        self.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .maintenance()
             .backup(destination.as_ref())
     }
 
     pub fn cleanup_cache(&self) -> Result<usize> {
         let _work = self.work.lock().map_err(|_| Error::Poisoned)?;
-        self.database
+        self.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .maintenance()
             .cleanup_cache()
     }
 
@@ -35,11 +32,10 @@ impl Core {
     /// Unavailable folders keep their existing records and are reported individually.
     pub fn rebuild_index(&self) -> Result<MaintenanceReport> {
         let _work = self.work.lock().map_err(|_| Error::Poisoned)?;
-        self.database
+        self.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .search()
-            .rebuild()?;
+            .rebuild_search()?;
         let folders = self.folders()?;
         let mut result = MaintenanceReport::default();
         for folder in folders {
@@ -61,11 +57,10 @@ impl Core {
                 }),
             }
         }
-        self.database
+        self.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .search()
-            .rebuild()?;
+            .rebuild_search()?;
         Ok(result)
     }
 }

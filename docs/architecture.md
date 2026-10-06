@@ -8,19 +8,21 @@ Lenscribe is one desktop process with a Rust engine and a Svelte settings window
 
 | Path | Responsibility |
 | --- | --- |
-| `src-tauri/crates/src/lib.rs` | Core operations, path validation, and serialized writes |
-| `src-tauri/crates/src/trailer.rs` | Image detection, original bytes, and text trailer reads/writes |
-| `src-tauri/crates/src/scan.rs` | Folder rules, scan state, and incremental reconciliation |
-| `src-tauri/crates/src/merkle.rs` | Directory Merkle tree |
-| `src-tauri/crates/src/database.rs` | WeDB ownership, durable batches, and repository coordination |
-| `src-tauri/crates/src/database/` | Repositories for folders, files, search, extraction cache, jobs, recovery, and maintenance |
-| `src-tauri/crates/src/maintenance.rs` | Backup, trailer re-import, search rebuild, and cache cleanup |
+| `src-tauri/crates/src/domain/` | Image and folder identities, Merkle trees, folder rules, configuration values, and search matching policies |
+| `src-tauri/crates/src/application/core.rs` | Index, search, image preparation, text editing, and extraction commit use cases |
+| `src-tauri/crates/src/application/scan.rs` | Scan state and incremental reconciliation through image and repository ports |
+| `src-tauri/crates/src/application/extraction.rs` | Concurrent extraction, cancellation, pacing, retries, and response recovery |
+| `src-tauri/crates/src/application/maintenance.rs` | Backup, trailer re-import, search rebuild, and cache cleanup workflows |
+| `src-tauri/crates/src/ports/` | Repository, image filesystem, vision provider, settings store, and watcher contracts |
+| `src-tauri/crates/src/adapters/wedb/` | Durable repository implementation, atomic batches, projections, backups, and legacy import |
+| `src-tauri/crates/src/adapters/filesystem/` | Safe paths, lazy traversal, image trailer I/O, JSON settings, and native watcher implementation |
+| `src-tauri/crates/src/adapters/llm.rs` | Vision provider adapter through `genai` and completion validation |
+| `src-tauri/crates/src/adapters/llm/connection.rs` | Bounded provider model discovery |
+| `src-tauri/crates/src/adapters/http.rs` | Read-only loopback transport calling application use cases |
+| `src-tauri/crates/src/runtime/daemon.rs` | Background lifecycle and settings, extraction, watcher, and HTTP coordination |
+| `src-tauri/crates/src/composition.rs` | Default adapter wiring for desktop and headless entry points |
+| `src-tauri/crates/src/lib.rs` | Public exports, including compatibility aliases for existing callers |
 | `src-tauri/crates/migrations/` | Legacy SQLite schemas used by migration fixtures |
-| `src-tauri/crates/src/daemon.rs` | Settings and background lifecycle |
-| `src-tauri/crates/src/extraction.rs` | Concurrent extraction, cancellation, pacing, and retries |
-| `src-tauri/crates/src/llm.rs` | Vision requests through `genai` and completion validation |
-| `src-tauri/crates/src/llm/connection.rs` | Bounded provider model discovery |
-| `src-tauri/crates/src/http.rs` | Read-only loopback API |
 | `src-tauri/src/commands.rs` | Tauri adapters; file work runs off the UI thread |
 | `src/lib/core.ts` | Typed Tauri command and event wrappers |
 | `src/lib/clients/` | Desktop, updater, and isolated preview adapters |
@@ -31,11 +33,31 @@ Lenscribe is one desktop process with a Rust engine and a Svelte settings window
 
 Rust's serialized DTOs are the source of truth for `src/lib/generated/core.ts`, generated through [ts-rs](https://github.com/Aleph-Alpha/ts-rs). After changing a DTO, run `bun run types:generate`. `bun run check` verifies the contract before checking Svelte. Do not edit generated bindings manually.
 
+### Ports and adapters
+
+The domain contains business values and policies without filesystem, database, or network operations. Application services orchestrate those values through ports. Concrete adapters depend inward on those contracts. The outer daemon runtime coordinates long-lived tasks and the optional HTTP transport. Default constructors are wired in `composition.rs`; the application layer does not construct WeDB, `genai`, or native watcher instances.
+
+```mermaid
+flowchart LR
+    Entry["Tauri, HTTP, filesystem events"] --> Application["Application use cases"]
+    Application --> Domain["Domain values and policies"]
+    Application --> Ports["I/O ports"]
+    Adapters["WeDB, files, genai, JSON settings"] -. implement .-> Ports
+    Wiring["Composition and daemon runtime"] --> Application
+    Wiring --> Adapters
+```
+
+`Core::new` accepts the index repository, image filesystem, watcher, and vision factory. `Daemon::new` accepts a settings store. `Core::open` and `Daemon::load` provide the existing default wiring. Image traversal remains lazy, excluded directories are pruned by the filesystem adapter, and path safety is enforced there before image reads and writes. Settings values validate syntax and policies in the domain; the JSON adapter also checks canonical folder aliases when loading or saving.
+
+The index port separates catalog, extraction queue, recovery, and maintenance capabilities, but one repository instance owns them all. Scans and response/failure updates retain their atomic commits and the core's existing serialization lock. Ports expose those operations rather than WeDB keys or generic database transactions. A replacement repository must preserve the same durability and generation checks.
+
+Add new business policies to `domain`, workflows to `application`, and external integrations to `adapters`. Keep concrete wiring in `composition` or `runtime`. The adapter-injection tests exercise background processing with an in-memory settings store and a fake vision provider, plus image-write failure recovery through a replaced filesystem port.
+
 Canonical storage uses a versioned Lenscribe keyspace in WeDB. An unsupported schema is rejected. The one-time importer reads a consistent SQLite transaction, preserves IDs, text, cache, queue generations, retries, and Merkle roots, validates references and hashes, then commits the imported records and schema marker together. It never updates or removes the original SQLite database. The default `legacy-sqlite` feature supplies this reader; `--no-default-features` builds the core without SQLite. Existing data requiring migration is rejected when that feature is absent.
 
 The storage facade sits behind the core mutex, which serializes mutations including read/modify/write operations. Repositories expose application operations such as file lookup, queue claims, response saving, and failure recording. Canonical records use an application-owned keyspace rather than WeDB internal Redis encodings. A scan batches file records, immutable text bodies, cache pointers, stale-job cleanup, Merkle checkpoints, and the folder root atomically. Failure records and endpoint state also share a batch. Each critical batch is followed by `persist()` (Fjall `SyncAll`); projections become visible only after that sync succeeds. A failed sync stops further writes until reopening.
 
-The desktop profile budgets 32 MiB for the block cache, 8 MiB for data memtables, 4 MiB for metadata memtables, 128 MiB for journal rotation, and two background workers. These are storage budgets, not a total RAM limit: metadata, queue projections, search postings, and transient operations also use memory. Fjall holds an exclusive database lock. Graceful daemon shutdown waits for extraction and API tasks and performs a final sync. The public core, Tauri, HTTP, and TypeScript contracts remain stable.
+The desktop profile budgets 32 MiB for the block cache, 8 MiB for data memtables, 4 MiB for metadata memtables, 128 MiB for journal rotation, and two background workers. These are storage budgets, not a total RAM limit: metadata, queue projections, search postings, and transient operations also use memory. Fjall holds an exclusive database lock. Graceful daemon shutdown waits for extraction and API tasks and performs a final sync. Tauri, HTTP, and TypeScript contracts remain stable, and existing Rust module paths and facade methods remain available. Watcher and legacy database errors now carry messages instead of concrete adapter error types, keeping the shared error contract independent of `notify` and `rusqlite`.
 
 ### Canonical key layout
 
@@ -56,7 +78,7 @@ Metadata, ready/deadline queues, vocabulary, and search postings are derived pro
 
 ### Scale and recovery validation
 
-The ignored `database::tests::storage_scaling_probe` exercises 10,000 and 100,000 records. Set `LENSCRIBE_BENCH_FILES` to choose the count, then run:
+The ignored `adapters::wedb::database::tests::storage_scaling_probe` exercises 10,000 and 100,000 records. Set `LENSCRIBE_BENCH_FILES` to choose the count, then run:
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --all-features --lib storage_scaling_probe -- --ignored --nocapture

@@ -1,24 +1,12 @@
 use super::{store::Change, Database};
-use crate::{ExtractionJob, FileRecord, Result};
+pub(crate) use crate::ports::index::{EndpointState, StoredFailure};
+use crate::{ExtractionJob, Result};
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct EndpointState {
-    pub retry_at_ms: Option<u64>,
-    pub next_request_ms: u64,
-    pub blocked_error: Option<String>,
-}
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct FailureState {
     pub file_id: i64,
     pub recovery_id: String,
     pub image_hash: String,
-    pub request_id: Option<i64>,
-    pub error: String,
-    pub attempts: u32,
-    pub retry_at_ms: Option<u64>,
-}
-pub(crate) struct StoredFailure {
-    pub file: FileRecord,
     pub request_id: Option<i64>,
     pub error: String,
     pub attempts: u32,

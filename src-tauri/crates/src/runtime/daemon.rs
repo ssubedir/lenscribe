@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeSet,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -66,7 +66,7 @@ struct RuntimeState {
 
 pub struct Daemon {
     core: Arc<Core>,
-    settings_path: PathBuf,
+    settings_store: Arc<dyn crate::ports::settings::SettingsStore>,
     state: Mutex<RuntimeState>,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
     extraction: ExtractionController,
@@ -76,17 +76,17 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn load(
+    pub fn new(
         core: Arc<Core>,
-        settings_path: impl AsRef<Path>,
+        settings_store: Arc<dyn crate::ports::settings::SettingsStore>,
         on_event: Arc<dyn Fn(WatchEvent) + Send + Sync>,
     ) -> Result<Arc<Self>> {
-        let settings_path = settings_path.as_ref().to_path_buf();
-        let settings = Settings::load(&settings_path)?;
+        let settings = settings_store.load()?;
+        settings.validate()?;
         let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
         Ok(Arc::new(Self {
             core,
-            settings_path,
+            settings_store,
             state: Mutex::new(RuntimeState {
                 settings,
                 api: None,
@@ -231,9 +231,10 @@ impl Daemon {
         if self.stopped.load(Ordering::Relaxed) {
             return Err(Error::InvalidInput("daemon has been stopped".into()));
         }
-        let path = self.settings_path.clone();
+        settings.validate()?;
+        let store = self.settings_store.clone();
         let saved = settings.clone();
-        tokio::task::spawn_blocking(move || saved.save(&path))
+        tokio::task::spawn_blocking(move || store.save(&saved))
             .await
             .map_err(task_error)??;
         self.state.lock().map_err(|_| Error::Poisoned)?.settings = settings;

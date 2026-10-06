@@ -6,13 +6,13 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("database: {0}")]
     #[cfg(feature = "legacy-sqlite")]
-    Database(#[from] rusqlite::Error),
+    Database(String),
     #[error("storage: {0}")]
     Storage(String),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("folder watcher: {0}")]
-    Watch(#[from] notify::Error),
+    Watch(String),
     #[error("invalid Lenscribe trailer: {0}")]
     InvalidTrailer(String),
     #[error("only PNG, JPEG, and WebP images are supported: {0}")]

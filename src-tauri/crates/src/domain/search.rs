@@ -1,5 +1,25 @@
+//! Shared Unicode normalization and typo-matching policy, independent of an index engine.
+use std::collections::BTreeSet;
+use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+
+pub(crate) fn normalize(text: &str) -> String {
+    text.to_lowercase()
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
+}
+
+pub(crate) fn words(text: &str) -> BTreeSet<String> {
+    normalize(text)
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// One insertion, deletion, substitution, or adjacent transposition, using Unicode characters.
-pub(super) fn within_one_edit(left: &[char], right: &[char]) -> bool {
+pub(crate) fn within_one_edit(left: &[char], right: &[char]) -> bool {
     if left.len().abs_diff(right.len()) > 1 {
         return false;
     }

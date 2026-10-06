@@ -1,27 +1,12 @@
-mod fuzzy;
 use super::{
     store::{storage_error, State, Store},
     Database,
 };
+use crate::domain::search::{normalize, within_one_edit, words};
 use crate::{Error, FileRecord, Result, SearchHit, SearchPage};
 use std::collections::{BTreeMap, BTreeSet};
-use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 use wedb_embed::{InvertedIndex, SearchIndexSchema};
 
-pub(super) fn normalize(text: &str) -> String {
-    text.to_lowercase()
-        .nfd()
-        .filter(|c| !is_combining_mark(*c))
-        .map(|c| if c == 'ς' { 'σ' } else { c })
-        .collect()
-}
-pub(super) fn words(text: &str) -> BTreeSet<String> {
-    normalize(text)
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
 pub(super) struct SearchIndex {
     inverted: InvertedIndex,
     schema: SearchIndexSchema,
@@ -169,10 +154,7 @@ impl SearchIndex {
                     {
                         for term in terms.keys() {
                             if term != &word
-                                && fuzzy::within_one_edit(
-                                    &characters,
-                                    &term.chars().collect::<Vec<_>>(),
-                                )
+                                && within_one_edit(&characters, &term.chars().collect::<Vec<_>>())
                             {
                                 alternatives.insert(term.clone());
                             }

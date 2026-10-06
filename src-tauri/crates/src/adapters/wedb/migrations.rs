@@ -4,10 +4,10 @@ use rusqlite::Connection;
 use crate::{Error, Result};
 
 const MIGRATIONS: &[&str] = &[
-    include_str!("../migrations/001-index.sql"),
-    include_str!("../migrations/002-extraction-cache-and-jobs.sql"),
-    include_str!("../migrations/003-extraction-retries.sql"),
-    include_str!("../migrations/004-queue-indexes.sql"),
+    include_str!("../../../migrations/001-index.sql"),
+    include_str!("../../../migrations/002-extraction-cache-and-jobs.sql"),
+    include_str!("../../../migrations/003-extraction-retries.sql"),
+    include_str!("../../../migrations/004-queue-indexes.sql"),
 ];
 
 pub(crate) fn apply(connection: &Connection) -> Result<()> {

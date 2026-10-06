@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::{
-    llm::{ExtractionError, VisionClient},
+    ports::vision::{ExtractionError, VisionProvider},
     settings::ExtractionSettings,
     Core, Error, FileRecord, Result,
 };
@@ -114,19 +114,17 @@ impl ExtractionController {
             running.retired.push(task);
         }
         running.cancelled = Arc::new(AtomicBool::new(false));
-        core.database
+        core.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .jobs()
             .recover_leases()?;
         if force_retry {
-            if let Ok(client) = VisionClient::new(config.settings.clone()) {
-                let recovery = recovery_id(&client, &config.settings);
-                core.database
+            if let Ok(client) = core.vision.create(config.settings.clone()) {
+                let recovery = recovery_id(client.as_ref(), &config.settings);
+                core.index
                     .lock()
                     .map_err(|_| Error::Poisoned)?
-                    .recovery()
-                    .clear(&recovery)?;
+                    .clear_failures(&recovery)?;
             }
         }
         {
@@ -207,9 +205,9 @@ fn now_ms() -> u64 {
         .min(i64::MAX as u128) as u64
 }
 
-fn recovery_id(client: &VisionClient, settings: &ExtractionSettings) -> String {
+fn recovery_id(client: &dyn VisionProvider, settings: &ExtractionSettings) -> String {
     // Credentials affect recovery, but never the extraction cache or image trailer identity.
-    crate::trailer::hash_bytes(
+    crate::domain::image::hash_bytes(
         format!("{}\0{}", client.processor(), settings.api_key.trim()).as_bytes(),
     )
 }
@@ -241,8 +239,8 @@ async fn worker(
     gate: Arc<tokio::sync::Mutex<()>>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
-    let client = match VisionClient::new(config.settings.clone()) {
-        Ok(client) => Arc::new(client),
+    let client = match core.vision.create(config.settings.clone()) {
+        Ok(client) => client,
         Err(error) => {
             if let Ok(mut status) = status.lock() {
                 status.phase = ExtractionPhase::NeedsConfiguration;
@@ -251,20 +249,18 @@ async fn worker(
             return Ok(());
         }
     };
-    let recovery = recovery_id(&client, &config.settings);
+    let recovery = recovery_id(client.as_ref(), &config.settings);
     let wake = core
-        .database
+        .index
         .lock()
         .map_err(|_| Error::Poisoned)?
-        .wake
-        .clone();
+        .change_notification();
     let owner = format!("{}-{}", std::process::id(), now_ms());
     let (_, endpoint) = core
-        .database
+        .index
         .lock()
         .map_err(|_| Error::Poisoned)?
-        .recovery()
-        .load(&recovery)?;
+        .recovery_state(&recovery)?;
     let mut failures: BTreeMap<JobKey, Failure>;
     let endpoint = Arc::new(tokio::sync::Mutex::new(endpoint));
     let mut tasks = JoinSet::new();
@@ -281,8 +277,8 @@ async fn worker(
         let queue_recovery = recovery.clone();
         let claim_owner = owner.clone();
         let (pending, stored, next_due) = tokio::task::spawn_blocking(move || {
-            let database = snapshot_core.database.lock().map_err(|_| Error::Poisoned)?;
-            let pending = database.jobs().ready(
+            let database = snapshot_core.index.lock().map_err(|_| Error::Poisoned)?;
+            let pending = database.ready_jobs(
                 &folder_ids,
                 &queue_recovery,
                 now_ms(),
@@ -291,17 +287,12 @@ async fn worker(
             )?;
             let mut claimed = Vec::new();
             for job in pending {
-                if database
-                    .jobs()
-                    .claim(&job, &claim_owner, now_ms(), now_ms() + 3_600_000)?
-                {
+                if database.claim_job(&job, &claim_owner, now_ms(), now_ms() + 3_600_000)? {
                     claimed.push(job);
                 }
             }
-            let (failures, _) = database.recovery().load(&queue_recovery)?;
-            let next_due = database
-                .jobs()
-                .next_due(&folder_ids, &queue_recovery, &active_ids)?;
+            let (failures, _) = database.recovery_state(&queue_recovery)?;
+            let next_due = database.next_due(&folder_ids, &queue_recovery, &active_ids)?;
             Ok::<_, Error>((claimed, failures, next_due))
         })
         .await
@@ -411,17 +402,15 @@ async fn worker(
         let (job, result) = completed.map_err(|e| Error::InvalidInput(e.to_string()))?;
         let key = job_key(&job);
         active.remove(&key);
-        core.database
+        core.index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .jobs()
-            .release(&job)?;
+            .release_job(&job)?;
         let Some(result) = result else {
-            core.database
+            core.index
                 .lock()
                 .map_err(|_| Error::Poisoned)?
-                .jobs()
-                .defer(&job, now_ms() + 2000)?;
+                .defer_job(&job, now_ms() + 2000)?;
             continue;
         };
         match result {
@@ -464,10 +453,9 @@ async fn worker(
                     next_state.blocked_error = Some(error.message.clone());
                 }
                 if !core
-                    .database
+                    .index
                     .lock()
                     .map_err(|_| Error::Poisoned)?
-                    .recovery()
                     .save_failure(
                         &recovery,
                         &job,
@@ -497,10 +485,10 @@ async fn worker(
 
 struct JobContext {
     core: Arc<Core>,
-    client: Arc<VisionClient>,
+    client: Arc<dyn VisionProvider>,
     gate: Arc<tokio::sync::Mutex<()>>,
     cancelled: Arc<AtomicBool>,
-    endpoint: Arc<tokio::sync::Mutex<crate::database::EndpointState>>,
+    endpoint: Arc<tokio::sync::Mutex<crate::ports::index::EndpointState>>,
     recovery: String,
     requests_per_minute: u32,
 }
@@ -532,10 +520,9 @@ async fn reserve_request(context: &JobContext) -> std::result::Result<bool, Extr
                 };
             context
                 .core
-                .database
+                .index
                 .lock()
                 .map_err(|_| ExtractionError::permanent("Cannot reserve an extraction request"))?
-                .recovery()
                 .save_endpoint(&context.recovery, &state)
                 .map_err(|_| ExtractionError::permanent("Cannot persist request pacing"))?;
             return Ok(true);
@@ -561,10 +548,9 @@ async fn process_job(
     let prepared = tokio::task::spawn_blocking(move || {
         let image = prepare_core.prepare_image(file.folder_id, &file.relative_path)?;
         let saved = prepare_core
-            .database
+            .index
             .lock()
             .map_err(|_| Error::Poisoned)?
-            .jobs()
             .saved_text(&saved_job, &cache_processor)?;
         let cached = if saved.is_some() {
             saved

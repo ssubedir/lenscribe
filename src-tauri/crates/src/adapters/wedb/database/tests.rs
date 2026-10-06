@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::{merkle, trailer, FileDetails, FileRecord};
 
-use super::{Database, EndpointState};
+use super::Database;
+use crate::ports::index::EndpointState;
 
 fn details(folder_id: i64, path: &str, image: u8, text: Option<&str>) -> FileDetails {
     let image_hash = trailer::hash_bytes(&[image]);
@@ -479,7 +480,9 @@ fn scan_repositories_commit_or_roll_back_together() {
         .unwrap());
 
     // Fail the last write, after file, cache, and queue changes have run.
-    database.fail_write.set(true);
+    database
+        .fail_write
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let replacement = details(folder_id, "note.png", 3, Some("replacement espresso"));
     let changed = [replacement.clone()];
     let removed = ["removed.png".into()];
@@ -580,7 +583,9 @@ fn failure_and_endpoint_updates_commit_or_roll_back_together() {
         .recovery()
         .save_failure("provider", &job, "rate limited", 1, Some(500), &initial)
         .unwrap());
-    database.fail_write.set(true);
+    database
+        .fail_write
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let updated = EndpointState {
         retry_at_ms: None,
         next_request_ms: 200,
@@ -677,18 +682,20 @@ fn saved_results_survive_restart_and_deferral_but_not_a_new_generation() {
 
 #[test]
 fn a_failed_scan_keeps_exclusions_and_can_recover() {
-    use crate::{settings::FolderSettings, Core};
+    use crate::settings::FolderSettings;
     let temp = tempfile::tempdir().unwrap();
     let images = temp.path().join("images");
     std::fs::create_dir(&images).unwrap();
     for name in ["keep.jpg", "excluded.jpg"] {
         std::fs::write(
             images.join(name),
-            include_bytes!("../../tests/fixtures/pixel.jpg"),
+            include_bytes!("../../../../tests/fixtures/pixel.jpg"),
         )
         .unwrap();
     }
-    let core = Core::open(temp.path().join("index.wedb")).unwrap();
+    let database = Database::open(&temp.path().join("index.wedb")).unwrap();
+    let fail_write = database.fail_write.clone();
+    let core = crate::composition::core_with_repository(Box::new(database));
     let initial = core.scan_folder(&images).unwrap();
     core.set_folder_rules(
         &images,
@@ -698,8 +705,8 @@ fn a_failed_scan_keeps_exclusions_and_can_recover() {
         },
     )
     .unwrap();
-    core.database.lock().unwrap().fail_write.set(true);
-    let mut changed = include_bytes!("../../tests/fixtures/pixel.jpg").to_vec();
+    fail_write.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut changed = include_bytes!("../../../../tests/fixtures/pixel.jpg").to_vec();
     changed.extend_from_slice(b"new image");
     std::fs::write(images.join("keep.jpg"), changed).unwrap();
     assert!(core.reconcile_folder(&images).is_err());
@@ -721,15 +728,18 @@ fn restart_reconciles_a_trailer_written_before_job_acknowledgement() {
     let images = temp.path().join("images");
     std::fs::create_dir(&images).unwrap();
     let image = images.join("receipt.jpg");
-    std::fs::write(&image, include_bytes!("../../tests/fixtures/pixel.jpg")).unwrap();
+    std::fs::write(
+        &image,
+        include_bytes!("../../../../tests/fixtures/pixel.jpg"),
+    )
+    .unwrap();
     let path = temp.path().join("index.wedb");
     let core = Core::open(&path).unwrap();
     let folder = core.scan_folder(&images).unwrap().folder.id;
     let job = core.extraction_jobs(folder).unwrap().remove(0);
-    core.database
+    core.index
         .lock()
         .unwrap()
-        .jobs()
         .save_result(&job, "coffee saved", "fixture/v1")
         .unwrap();
     trailer::write_text(&image, &job.file.image_hash, "coffee saved", "fixture/v1").unwrap();
@@ -791,10 +801,10 @@ fn legacy_sqlite_import_preserves_ids_text_cache_jobs_recovery_and_the_original(
         let legacy = temp.path().join("index.sqlite");
         let connection = rusqlite::Connection::open(&legacy).unwrap();
         connection
-            .execute_batch(include_str!("../../migrations/001-index.sql"))
+            .execute_batch(include_str!("../../../../migrations/001-index.sql"))
             .unwrap();
         if version == 4 {
-            crate::migrations::apply(&connection).unwrap();
+            crate::adapters::wedb::migrations::apply(&connection).unwrap();
         }
         let file = details(17, "receipt.png", 1, Some("migration coffee"));
         connection
@@ -888,7 +898,7 @@ fn crash_recovery_restores_synced_records_and_reclaims_abandoned_work() {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "database::tests::crash_writer_fixture",
+            "adapters::wedb::database::tests::crash_writer_fixture",
             "--ignored",
             "--nocapture",
         ])
@@ -1160,7 +1170,7 @@ fn storage_scaling_probe() {
         connection
             .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
             .unwrap();
-        crate::migrations::apply(&connection).unwrap();
+        crate::adapters::wedb::migrations::apply(&connection).unwrap();
         let start = Instant::now();
         let transaction = connection.transaction().unwrap();
         transaction

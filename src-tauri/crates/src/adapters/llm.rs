@@ -19,34 +19,8 @@ use crate::{
     PreparedImage,
 };
 
-#[derive(Clone, Debug, thiserror::Error)]
-#[error("{message}")]
-pub struct ExtractionError {
-    pub message: String,
-    pub retryable: bool,
-    pub blocks_queue: bool,
-    pub retry_after_seconds: Option<u64>,
-}
-
-impl ExtractionError {
-    pub fn permanent(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            retryable: false,
-            blocks_queue: false,
-            retry_after_seconds: None,
-        }
-    }
-
-    fn temporary(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            retryable: true,
-            blocks_queue: false,
-            retry_after_seconds: None,
-        }
-    }
-}
+pub use crate::ports::vision::ExtractionError;
+use crate::ports::vision::{ExtractionFuture, VisionFactory, VisionProvider};
 
 pub struct VisionClient {
     client: Client,
@@ -419,5 +393,23 @@ fn safe_error(error: genai::Error) -> ExtractionError {
             ExtractionError::temporary("Cannot reach the LLM endpoint")
         }
         _ => ExtractionError::permanent("Endpoint returned invalid JSON or a non-JSON response"),
+    }
+}
+
+pub struct GenaiVisionFactory;
+impl VisionFactory for GenaiVisionFactory {
+    fn create(
+        &self,
+        settings: ExtractionSettings,
+    ) -> Result<std::sync::Arc<dyn VisionProvider>, ExtractionError> {
+        Ok(std::sync::Arc::new(VisionClient::new(settings)?))
+    }
+}
+impl VisionProvider for VisionClient {
+    fn processor(&self) -> &str {
+        VisionClient::processor(self)
+    }
+    fn extract<'a>(&'a self, image: &'a PreparedImage) -> ExtractionFuture<'a> {
+        Box::pin(VisionClient::extract(self, image))
     }
 }

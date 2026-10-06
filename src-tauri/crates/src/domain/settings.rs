@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, io::Write, path::Path};
+use std::{collections::BTreeSet, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -145,7 +145,7 @@ impl Default for ExtractionSettings {
 
 impl ExtractionSettings {
     pub fn normalized_base_url(&self) -> Result<String> {
-        let url = reqwest::Url::parse(self.base_url.trim()).map_err(|_| {
+        let url = url::Url::parse(self.base_url.trim()).map_err(|_| {
             Error::InvalidInput("LLM base URL must be a valid HTTP or HTTPS URL".into())
         })?;
         if !matches!(url.scheme(), "http" | "https")
@@ -201,9 +201,7 @@ impl ExtractionSettings {
                 "Extraction prompt must contain 1–16384 bytes".into(),
             ));
         }
-        if self.api_key.len() > 4096
-            || reqwest::header::HeaderValue::from_str(self.api_key.trim()).is_err()
-        {
+        if self.api_key.len() > 4096 || !valid_header_value(self.api_key.trim()) {
             return Err(Error::InvalidInput(
                 "API key must be at most 4096 bytes without invalid header characters".into(),
             ));
@@ -266,33 +264,6 @@ impl std::fmt::Debug for SavedConnection {
 }
 
 impl Settings {
-    pub fn load(path: &Path) -> Result<Self> {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default())
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
-        if let Some(extraction) = value
-            .get_mut("extraction")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            // Discard the old variable-name field without reading or importing its value.
-            // Authenticated setups need the key entered in Settings before extraction resumes.
-            if extraction
-                .remove("apiKeyEnv")
-                .is_some_and(|legacy| legacy.as_str().is_some_and(|name| !name.is_empty()))
-            {
-                extraction.insert("enabled".into(), false.into());
-            }
-        }
-        let settings: Self = serde_json::from_value(value)?;
-        settings.validate()?;
-        Ok(settings)
-    }
-
     pub fn validate(&self) -> Result<()> {
         if self.version != 1 {
             return Err(Error::InvalidInput("unsupported settings version".into()));
@@ -321,7 +292,7 @@ impl Settings {
         }
         let mut paths = BTreeSet::new();
         for folder in &self.folders {
-            crate::scan::FolderRules::new(folder)?;
+            crate::domain::rules::FolderRules::new(folder)?;
             let path = Path::new(&folder.path);
             if !path.is_absolute() {
                 return Err(Error::InvalidInput(
@@ -329,11 +300,7 @@ impl Settings {
                 ));
             }
             // Offline folders remain valid configuration and are retried when they become available.
-            let key = path
-                .canonicalize()
-                .unwrap_or_else(|_| path.into())
-                .to_string_lossy()
-                .into_owned();
+            let key = path.to_string_lossy().into_owned();
             #[cfg(windows)]
             let key = key.to_lowercase();
             if !paths.insert(key) {
@@ -344,23 +311,11 @@ impl Settings {
         }
         Ok(())
     }
+}
 
-    pub fn save(&self, path: &Path) -> Result<()> {
-        self.validate()?;
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent)?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".lenscribe-settings-")
-            .tempfile_in(parent)?;
-        serde_json::to_writer_pretty(&mut temporary, self)?;
-        temporary.write_all(b"\n")?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(path)
-            .map_err(|error| Error::Io(error.error))?;
-        Ok(())
-    }
+fn valid_header_value(value: &str) -> bool {
+    value
+        .as_bytes()
+        .iter()
+        .all(|byte| matches!(*byte, b'\t' | 32..=126 | 128..=255))
 }

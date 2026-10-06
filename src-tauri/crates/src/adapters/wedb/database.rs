@@ -14,7 +14,6 @@ mod tests;
 
 use crate::{Error, FileDetails, Result};
 pub(crate) use maintenance::restore;
-pub(crate) use recovery::EndpointState;
 use std::{
     cell::{Cell, RefCell},
     path::Path,
@@ -29,7 +28,7 @@ pub(crate) struct Database {
     queues: RefCell<std::collections::BTreeMap<String, jobs::QueueIndex>>,
     poisoned: Cell<bool>,
     #[cfg(test)]
-    fail_write: Cell<bool>,
+    fail_write: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Database {
@@ -81,7 +80,7 @@ impl Database {
             queues: RefCell::new(std::collections::BTreeMap::new()),
             poisoned: Cell::new(false),
             #[cfg(test)]
-            fail_write: Cell::new(false),
+            fail_write: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         database.jobs().recover_leases()?;
         Ok(database)
@@ -94,7 +93,10 @@ impl Database {
             ));
         }
         #[cfg(test)]
-        if self.fail_write.replace(false) {
+        if self
+            .fail_write
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(Error::Storage("injected write failure".into()));
         }
         // Publish projections only after the atomic batch AND its disk sync succeed.

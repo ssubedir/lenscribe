@@ -15,32 +15,15 @@ use crate::{Error, Result};
 const START: &[u8] = b"\nLENSCRIBE-TEXT-V1\n";
 const END: &str = "\nLENSCRIBE-END-V1 ";
 const FOOTER_LEN: usize = END.len() + 20 + 1 + 20 + 1 + 64 + 1;
-pub const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
+pub use crate::domain::image::{hash_bytes, InspectedImage, TextTrailer, MAX_TEXT_BYTES};
 const MAX_PAYLOAD_BYTES: usize = MAX_TEXT_BYTES + 32 * 1024;
 const MAX_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextTrailer {
-    pub image_hash: String,
-    /// A stable provider/model/settings identifier; timestamps do not belong here.
-    pub processor: String,
-    pub text: String,
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Header {
     image_hash: String,
     processor: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct InspectedImage {
-    pub image_hash: String,
-    pub image_length: u64,
-    pub mime_type: &'static str,
-    pub trailer: Option<TextTrailer>,
 }
 
 pub fn supported_path(path: &Path) -> bool {
@@ -182,10 +165,6 @@ pub fn write_text(
         trailer: Some(trailer),
         ..before
     })
-}
-
-pub fn hash_bytes(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
 }
 
 fn read_trailer(file: &mut File) -> Result<(u64, Option<TextTrailer>)> {
