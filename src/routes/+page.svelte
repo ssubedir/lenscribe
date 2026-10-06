@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { isTauri } from "@tauri-apps/api/core";
   import { createDesktopClient } from "$lib/clients/desktop";
   import { SettingsController } from "$lib/settings/controller.svelte";
-  import { pages } from "$lib/settings/navigation";
+  import { pages, type Page } from "$lib/settings/navigation";
   import Icon from "$lib/components/Icon.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
   import FileInspector from "$lib/components/FileInspector.svelte";
@@ -21,7 +21,18 @@
   const model = new SettingsController();
   let desktop = $state(true);
   let preview = $state(false);
+  let inspector = $state<{ requestLeave: (leave?: () => void) => void }>();
   const activePage = $derived(pages.find((entry) => entry.id === model.page)!);
+
+  function navigate(page: Page) {
+    const leave = () => model.navigate(page);
+    if (model.inspecting && inspector) inspector.requestLeave(leave);
+    else leave();
+  }
+  function closeInspection() {
+    model.navigate("folders");
+    void tick().then(() => document.getElementById("page-title")?.focus());
+  }
 
   $effect(() => {
     const theme = model.draft?.theme ?? model.status?.settings.theme;
@@ -60,7 +71,7 @@
   }}
 />
 
-<svelte:head><title>Lenscribe · {activePage.label}</title></svelte:head>
+<svelte:head><title>Lenscribe · {model.inspecting?.name ?? activePage.label}</title></svelte:head>
 
 <div class="settings-ui">
   <div class="app-frame" class:custom-titlebar={desktop || preview}>
@@ -82,7 +93,7 @@
               aria-label={entry.label}
               title={entry.label}
               aria-current={model.page === entry.id ? "page" : undefined}
-              onclick={() => model.navigate(entry.id)}
+              onclick={() => navigate(entry.id)}
             >
               <Icon name={entry.icon} size={19} /><span>{entry.label}</span>
               {#if entry.id === "folders" && model.draft?.folders.length}<span class="nav-count"
@@ -96,11 +107,21 @@
         </div>
       </aside>
       <div class="workspace">
-        <main>
+        <main class:inspecting={model.inspecting !== null}>
           <header class="page-header">
             <div>
-              <h1>{activePage.label}</h1>
-              <p class="subtitle">{activePage.description}</p>
+              {#if model.inspecting}<button
+                  type="button"
+                  class="text-button inspection-back"
+                  onclick={() => inspector?.requestLeave()}
+                  ><Icon name="back" size={16} /> Back to Watched Folders</button
+                >{/if}
+              <h1 id="page-title" tabindex="-1">{model.inspecting?.name ?? activePage.label}</h1>
+              <p class="subtitle">
+                {model.inspecting
+                  ? "Search filenames and extracted text, or edit an image’s transcription."
+                  : activePage.description}
+              </p>
             </div>
           </header>
           {#if preview}<div class="preview-notice">
@@ -131,45 +152,63 @@
               >
             </div>{/if}
           {#if model.draft && model.status && model.client}
-            <form id="settings-form" onsubmit={model.save} oninput={model.clearFeedback} novalidate>
-              <fieldset disabled={model.busy !== null}>
-                {#if model.page === "overview"}
-                  <Overview
-                    status={model.status}
-                    onnavigate={model.navigate}
-                    onretry={model.retry}
-                    retryDisabled={model.busy !== null || preview}
-                    retrying={model.busy === "retry"}
-                    oninspect={model.inspect}
-                  />
-                {:else if model.page === "folders"}
-                  <WatchedFolders
-                    bind:draft={model.draft}
-                    status={model.status}
-                    onchoose={model.chooseFolder}
-                    onadd={model.addFolder}
-                    oninspect={model.inspect}
-                    onchange={model.clearFeedback}
-                  />
-                {:else if model.page === "extraction"}
-                  <AIExtraction
-                    bind:draft={model.draft}
-                    bind:advancedOpen={model.advancedOpen}
-                    bind:revealKey={model.revealKey}
-                    client={model.client}
-                  />
-                {:else if model.page === "api"}
-                  <SearchRead
-                    bind:draft={model.draft}
-                    status={model.status}
-                    copyCommand={model.copyCommand}
-                    bind:fileTool={model.fileTool}
-                  />
-                {:else if model.page === "general"}
-                  <General bind:draft={model.draft} client={model.client} />
-                {/if}
-              </fieldset>
-            </form>
+            {#if model.inspecting}
+              {#key model.inspecting.folderId}
+                <FileInspector
+                  bind:this={inspector}
+                  {...model.inspecting}
+                  client={model.client}
+                  issues={model.status.extraction.issues}
+                  processingAvailable={model.status.settings.extraction.enabled &&
+                    !model.status.settings.monitoringPaused}
+                  onclose={closeInspection}
+                  onchange={() => void model.refresh()}
+                />
+              {/key}
+            {:else}<form
+                id="settings-form"
+                onsubmit={model.save}
+                oninput={model.clearFeedback}
+                novalidate
+              >
+                <fieldset disabled={model.busy !== null}>
+                  {#if model.page === "overview"}
+                    <Overview
+                      status={model.status}
+                      onnavigate={model.navigate}
+                      onretry={model.retry}
+                      retryDisabled={model.busy !== null || preview}
+                      retrying={model.busy === "retry"}
+                      oninspect={model.inspect}
+                    />
+                  {:else if model.page === "folders"}
+                    <WatchedFolders
+                      bind:draft={model.draft}
+                      status={model.status}
+                      onchoose={model.chooseFolder}
+                      onadd={model.addFolder}
+                      oninspect={model.inspect}
+                      onchange={model.clearFeedback}
+                    />
+                  {:else if model.page === "extraction"}
+                    <AIExtraction
+                      bind:draft={model.draft}
+                      bind:advancedOpen={model.advancedOpen}
+                      bind:revealKey={model.revealKey}
+                      client={model.client}
+                    />
+                  {:else if model.page === "api"}
+                    <SearchRead
+                      bind:draft={model.draft}
+                      status={model.status}
+                      copyCommand={model.copyCommand}
+                      bind:fileTool={model.fileTool}
+                    />
+                  {:else if model.page === "general"}
+                    <General bind:draft={model.draft} client={model.client} />
+                  {/if}
+                </fieldset>
+              </form>{/if}
           {:else if !desktop}<section class="card empty-state">
               <Icon name="settings" size={36} />
               <h2>Open Lenscribe on your desktop</h2>
@@ -182,7 +221,9 @@
               Connecting to Lenscribe…
             </div>{/if}
         </main>
-        {#if model.draft && (model.dirty || model.busy === "save")}<footer class="save-bar">
+        {#if !model.inspecting && model.draft && (model.dirty || model.busy === "save")}<footer
+            class="save-bar"
+          >
             <div>
               <span class="dot" class:quiet={!model.dirty}></span><span
                 >{model.busy === "save" ? "Saving changes…" : "You have unsaved changes"}</span
@@ -210,12 +251,3 @@
     </div>
   </div>
 </div>
-{#if model.inspecting && model.status && model.client}<FileInspector
-    {...model.inspecting}
-    client={model.client}
-    issues={model.status.extraction.issues}
-    processingAvailable={model.status.settings.extraction.enabled &&
-      !model.status.settings.monitoringPaused}
-    onclose={() => (model.inspecting = null)}
-    onchange={() => void model.refresh()}
-  />{/if}

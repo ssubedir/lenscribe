@@ -54,10 +54,13 @@ export class SettingsController {
   }
   navigate = (page: Page) => {
     if (this.busy === "update") return;
+    this.inspecting = null;
     this.page = page;
     this.revealKey = false;
   };
   inspect = (inspection: Inspection) => {
+    if (this.busy === "update") return;
+    this.page = "folders";
     this.inspecting = inspection;
   };
   clearFeedback = () => {

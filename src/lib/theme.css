@@ -4,6 +4,8 @@
 
 /* Component fallbacks preserve the existing light palette. */
 :root[data-theme="dark"] {
+  --highlight-bg: #6b5424;
+  --highlight-text: #fff0c2;
   color-scheme: dark;
   --canvas: #131b17;
   --sidebar: #18221c;

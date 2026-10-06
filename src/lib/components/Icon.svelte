@@ -7,6 +7,7 @@
     terminal: "m5 7 5 5-5 5 M13 17h6",
     settings: "M4 7h16 M4 17h16 M8 4v6 M16 14v6",
     arrow: "M5 12h14 m-5-5 5 5-5 5",
+    back: "M19 12H5 m5-5-5 5 5 5",
     plus: "M12 5v14 M5 12h14",
     check: "m5 12 4 4L19 6",
     warning: "m12 3 10 18H2L12 3z M12 9v5 M12 17h.01",
