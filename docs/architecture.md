@@ -8,19 +8,19 @@ Lenscribe is one desktop process with a Rust engine and a Svelte settings window
 
 | Path | Responsibility |
 | --- | --- |
-| `src-tauri/crates/lenscribe-core/src/lib.rs` | Core operations, path validation, and serialized writes |
-| `src-tauri/crates/lenscribe-core/src/trailer.rs` | Image detection, original bytes, and text trailer reads/writes |
-| `src-tauri/crates/lenscribe-core/src/scan.rs` | Folder rules, scan state, and incremental reconciliation |
-| `src-tauri/crates/lenscribe-core/src/merkle.rs` | Directory Merkle tree |
-| `src-tauri/crates/lenscribe-core/src/database.rs` | WeDB ownership, durable batches, and repository coordination |
-| `src-tauri/crates/lenscribe-core/src/database/` | Repositories for folders, files, search, extraction cache, jobs, recovery, and maintenance |
-| `src-tauri/crates/lenscribe-core/src/maintenance.rs` | Backup, trailer re-import, search rebuild, and cache cleanup |
-| `src-tauri/crates/lenscribe-core/migrations/` | Legacy SQLite schemas used by migration fixtures |
-| `src-tauri/crates/lenscribe-core/src/daemon.rs` | Settings and background lifecycle |
-| `src-tauri/crates/lenscribe-core/src/extraction.rs` | Concurrent extraction, cancellation, pacing, and retries |
-| `src-tauri/crates/lenscribe-core/src/llm.rs` | Vision requests through `genai` and completion validation |
-| `src-tauri/crates/lenscribe-core/src/llm/connection.rs` | Bounded provider model discovery |
-| `src-tauri/crates/lenscribe-core/src/http.rs` | Read-only loopback API |
+| `src-tauri/crates/src/lib.rs` | Core operations, path validation, and serialized writes |
+| `src-tauri/crates/src/trailer.rs` | Image detection, original bytes, and text trailer reads/writes |
+| `src-tauri/crates/src/scan.rs` | Folder rules, scan state, and incremental reconciliation |
+| `src-tauri/crates/src/merkle.rs` | Directory Merkle tree |
+| `src-tauri/crates/src/database.rs` | WeDB ownership, durable batches, and repository coordination |
+| `src-tauri/crates/src/database/` | Repositories for folders, files, search, extraction cache, jobs, recovery, and maintenance |
+| `src-tauri/crates/src/maintenance.rs` | Backup, trailer re-import, search rebuild, and cache cleanup |
+| `src-tauri/crates/migrations/` | Legacy SQLite schemas used by migration fixtures |
+| `src-tauri/crates/src/daemon.rs` | Settings and background lifecycle |
+| `src-tauri/crates/src/extraction.rs` | Concurrent extraction, cancellation, pacing, and retries |
+| `src-tauri/crates/src/llm.rs` | Vision requests through `genai` and completion validation |
+| `src-tauri/crates/src/llm/connection.rs` | Bounded provider model discovery |
+| `src-tauri/crates/src/http.rs` | Read-only loopback API |
 | `src-tauri/src/commands.rs` | Tauri adapters; file work runs off the UI thread |
 | `src/lib/core.ts` | Typed Tauri command and event wrappers |
 | `src/lib/clients/` | Desktop, updater, and isolated preview adapters |

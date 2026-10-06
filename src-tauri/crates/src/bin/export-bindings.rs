@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../src/lib/generated/core.ts");
+    let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/generated/core.ts");
     let generated = lenscribe_core::bindings::typescript();
     if std::env::args().any(|arg| arg == "--check") {
         if fs::read_to_string(&output)?.replace("\r\n", "\n") != generated {

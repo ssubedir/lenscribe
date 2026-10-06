@@ -15,15 +15,14 @@ afterEach(async () => {
 async function versionFixture() {
   const directory = await mkdtemp(join(tmpdir(), "lenscribe-release-test-"));
   directories.push(directory);
-  await mkdir(join(directory, "src-tauri/crates/lenscribe-core"), { recursive: true });
+  await mkdir(join(directory, "src-tauri/crates"), { recursive: true });
   const sources = {
     "package.json":
       '{\n  "name": "lenscribe",\n  "version": "0.1.0",\n  "scripts": {"test": "bun test"}\n}\n',
     "src-tauri/tauri.conf.json": '{"version":"0.1.0","bundle":{"active":true}}\n',
     "src-tauri/Cargo.toml":
       '# Keep this comment\r\n[package]\r\nname = "lenscribe"\r\nversion = "0.1.0"\r\n\r\n[dependencies]\r\nserde = "1"\r\n',
-    "src-tauri/crates/lenscribe-core/Cargo.toml":
-      '[package]\nname = "lenscribe-core"\nversion = "0.1.0"\n',
+    "src-tauri/crates/Cargo.toml": '[package]\nname = "lenscribe-core"\nversion = "0.1.0"\n',
     "src-tauri/Cargo.lock":
       'version = 4\n\n[[package]]\nname = "lenscribe"\nversion = "0.1.0"\n\n[[package]]\nname = "lenscribe-core"\nversion = "0.1.0"\n\n[[package]]\nname = "unrelated"\nversion = "0.1.0"\nchecksum = "keep-me"\n',
   };

@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dir, "..");
 const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$/;
-const manifests = ["src-tauri/Cargo.toml", "src-tauri/crates/lenscribe-core/Cargo.toml"];
+const manifests = ["src-tauri/Cargo.toml", "src-tauri/crates/Cargo.toml"];
 
 function validateVersion(version: string) {
   if (version !== version.trim() || !versionPattern.test(version))
