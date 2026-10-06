@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
+  import InspectorSearch from "./InspectorSearch.svelte";
+  import SearchHighlight from "./SearchHighlight.svelte";
   import type { FileRecord, FileDetails } from "$lib/generated/core";
   import type { AppClient } from "$lib/clients/types";
 
@@ -25,10 +27,13 @@
     onclose: () => void;
     onchange: () => void;
   } = $props();
-  let dialog: HTMLDialogElement;
   let files = $state<FileRecord[]>([]);
   let total = $state(0);
   let query = $state(untrack(() => initialPath));
+  let appliedQuery = $state(untrack(() => initialPath));
+  let highlightQuery = $state(untrack(() => initialPath));
+  let highlightFuzzy = $state(true);
+  let searchNotice = $state<string | null>(null);
   let offset = $state(0);
   let selected = $state<FileDetails | null>(null);
   let image = $state("");
@@ -40,7 +45,7 @@
   let error = $state("");
   let notice = $state("");
   let noticeElement = $state<HTMLDivElement>();
-  let confirmClose = $state(false);
+  let pendingLeave = $state<(() => void) | null>(null);
   const textDirty = $derived(
     editing && (selected?.text === null || text !== (selected?.text ?? "")),
   );
@@ -52,11 +57,49 @@
   let generation = 0;
   let listGeneration = 0;
   let alive = true;
+  let composing = false;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     if (notice && noticeElement) noticeElement.parentElement?.scrollTo({ top: 0 });
   });
+  $effect(() => {
+    if (!textDirty) pendingLeave = null;
+  });
+  $effect(() => {
+    if (!textDirty && !working)
+      untrack(() => {
+        if (query !== appliedQuery && !composing && searchTimer === undefined)
+          scheduleSearch(query);
+      });
+  });
 
-  async function select(file: FileRecord, quiet = false) {
+  function cancelSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  function scheduleSearch(value: string) {
+    query = value;
+    cancelSearch();
+    // Ignore an older response as soon as the user changes the query.
+    listGeneration++;
+    if (composing || textDirty || working) return;
+    if (!query) {
+      void load(true);
+      return;
+    }
+    searchTimer = setTimeout(() => {
+      searchTimer = undefined;
+      void load(true);
+    }, 250);
+  }
+
+  function searchNow() {
+    cancelSearch();
+    if (!composing) void load(true);
+  }
+
+  async function select(file: FileRecord, quiet = false, listRequest?: number) {
     if (textDirty || working) return;
     const request = ++generation;
     if (!quiet) error = "";
@@ -66,7 +109,13 @@
     imageError = "";
     try {
       const details = await client.fileDetails(file.id);
-      if (!alive || request !== generation || textDirty) return;
+      if (
+        !alive ||
+        request !== generation ||
+        (listRequest !== undefined && listRequest !== listGeneration) ||
+        textDirty
+      )
+        return;
       selected = details;
       text = details.text ?? "";
       try {
@@ -76,7 +125,11 @@
         if (alive && request === generation) imageError = String(cause);
       }
     } catch (cause) {
-      if (alive && request === generation) {
+      if (
+        alive &&
+        request === generation &&
+        (listRequest === undefined || listRequest === listGeneration)
+      ) {
         selected = null;
         error = String(cause);
       }
@@ -85,26 +138,35 @@
 
   async function load(reset = false, quiet = false) {
     if (textDirty || working) return;
-    if (reset) offset = 0;
+    if (!quiet) error = "";
+    if (reset) {
+      offset = 0;
+      appliedQuery = query;
+    }
     loading = true;
     const request = ++listGeneration;
+    const searchQuery = appliedQuery;
     try {
-      const result = await client.listFiles(folderId, query, offset);
+      const result = await client.listFiles(folderId, searchQuery, offset, true);
       if (!alive || request !== listGeneration || textDirty || working) return;
       files = result.files;
       total = result.total;
+      searchNotice = result.notice;
+      highlightQuery = searchQuery;
+      highlightFuzzy = !result.notice;
       const next = files.find((file) => file.id === selected?.id) ?? files[0];
       if (next) {
         if (!selected || selected.id !== next.id || selected.recordHash !== next.recordHash)
-          await select(next, quiet);
+          await select(next, quiet, request);
       } else {
+        generation++;
         selected = null;
         image = "";
         editing = false;
         notice = "";
       }
     } catch (cause) {
-      if (alive) error = String(cause);
+      if (alive && request === listGeneration) error = String(cause);
     } finally {
       if (alive && request === listGeneration) loading = false;
     }
@@ -146,70 +208,58 @@
     }
   }
 
-  function close() {
+  export function requestLeave(leave = onclose) {
     if (working) return;
-    if (textDirty) confirmClose = true;
-    else onclose();
+    if (textDirty) pendingLeave = leave;
+    else leave();
   }
   onMount(() => {
-    dialog.showModal();
     void load();
     const timer = setInterval(() => {
-      if (!loading && !working && !editing) void load(false, true);
+      if (
+        !loading &&
+        !working &&
+        !editing &&
+        !composing &&
+        searchTimer === undefined &&
+        query === appliedQuery
+      )
+        void load(false, true);
     }, 3000);
     return () => {
       alive = false;
       generation++;
+      cancelSearch();
       clearInterval(timer);
     };
   });
 </script>
 
-<dialog
-  class="inspector-ui"
-  bind:this={dialog}
-  aria-labelledby="inspector-title"
-  oncancel={(event) => {
-    event.preventDefault();
-    close();
-  }}
->
-  <header>
-    <div>
-      <span class="eyebrow">FILE INSPECTOR</span>
-      <h2 id="inspector-title">{name}</h2>
-    </div>
-    <button class="icon-button" aria-label="Close file inspector" onclick={close} disabled={working}
-      ><Icon name="close" /></button
-    >
-  </header>
-  {#if confirmClose}<div class="notice warning" role="alert">
-      <span>Discard your unsaved text changes?</span><button onclick={() => (confirmClose = false)}
+<section class="inspector-ui" aria-label={"File Inspector · " + name}>
+  {#if pendingLeave}<div class="notice warning" role="alert">
+      <span>Discard your unsaved text changes?</span><button onclick={() => (pendingLeave = null)}
         >Keep Editing</button
-      ><button onclick={onclose}>Discard & Close</button>
+      ><button onclick={() => pendingLeave?.()}>Discard & Leave</button>
     </div>{/if}
   {#if error}<div class="notice warning" role="alert">{error}</div>{/if}
+  <InspectorSearch
+    value={query}
+    disabled={textDirty || working}
+    notice={searchNotice}
+    oninput={scheduleSearch}
+    onsubmit={searchNow}
+    oncompositionstart={() => {
+      composing = true;
+      cancelSearch();
+      listGeneration++;
+    }}
+    oncompositionend={(value) => {
+      composing = false;
+      scheduleSearch(value);
+    }}
+  />
   <div class="inspector-body">
     <aside class="file-list">
-      <form
-        onsubmit={(event) => {
-          event.preventDefault();
-          void load(true);
-        }}
-      >
-        <label for="filename-filter">Find a file</label>
-        <div class="filter-row">
-          <input
-            id="filename-filter"
-            type="search"
-            bind:value={query}
-            placeholder="Filter filenames…"
-            disabled={textDirty || working}
-          /><button aria-label="Filter files" disabled={textDirty || working}
-            ><Icon name="search" size={16} /></button
-          >
-        </div>
-      </form>
       <div class="list-meta">
         <span>{total} {total === 1 ? "image" : "images"}</span><button
           class="icon-button"
@@ -254,14 +304,7 @@
         </div>{/if}
     </aside>
     <section class="file-detail" aria-label="Selected image">
-      {#if selected}<div class="detail-heading">
-          <div>
-            <h3>{selected.relativePath.split("/").pop()}</h3>
-            <p>{selected.relativePath} · {(selected.imageLength / 1024).toFixed(0)} KiB</p>
-          </div>
-          <span class="status-pill">{selected.processor ? "Processed" : "Awaiting extraction"}</span
-          >
-        </div>
+      {#if selected}
         {#if notice}<div bind:this={noticeElement} class="notice action-notice" role="status">
             <span class="notice-icon"><Icon name="check" size={17} /></span><span
               class="notice-text">{notice}</span
@@ -270,196 +313,139 @@
             >
           </div>{/if}
         {#if selectedIssue}<div class="notice warning" role="alert">{selectedIssue.error}</div>{/if}
-        <div class="preview-image">
-          {#if image}<img
-              src={image}
-              alt={"Preview of " + selected.relativePath}
-              onerror={() => {
-                image = "";
-                imageError = "This image could not be displayed.";
-              }}
-            />{:else}<div class="preview-placeholder">
-              <Icon name="image" size={30} />
-              <p>{imageError || "Loading preview…"}</p>
-            </div>{/if}
-        </div>
-        <div class="text-heading">
-          <h3>Extracted Text</h3>
-          {#if !editing}<button
-              onclick={() => {
-                editing = true;
-                text = selected?.text ?? "";
-                notice = "";
-              }}
-              disabled={!enabled || working}>Edit Text</button
-            >{/if}
-        </div>
-        {#if editing}<label class="sr-only" for="image-text">Image text</label><textarea
-            id="image-text"
-            bind:value={text}
-            rows="8"
-            disabled={working}></textarea>
-          <div class="edit-actions">
-            <span>Saved directly inside this image.</span><button
-              onclick={() => {
-                editing = false;
-                text = selected?.text ?? "";
-              }}>Discard Text Changes</button
-            ><button class="primary" onclick={saveText} disabled={!textDirty || working}
-              >{working ? "Saving…" : "Save Text"}</button
+        <div class="detail-content">
+          <div class="detail-heading">
+            <div>
+              <h3>{selected.relativePath.split("/").pop()}</h3>
+              <p>{selected.relativePath} · {(selected.imageLength / 1024).toFixed(0)} KiB</p>
+            </div>
+            <span class="status-pill"
+              >{selected.processor ? "Processed" : "Awaiting extraction"}</span
             >
           </div>
-        {:else}<pre class="extracted-text">{selected.text === null
-              ? "This image is awaiting extraction."
-              : selected.text === ""
-                ? "Processed successfully; no readable text found."
-                : selected.text}</pre>{/if}
-        <div class="processing-actions">
-          <p>
-            {!enabled
-              ? "Enable this watched folder to edit or process its images."
-              : "Reprocess asks the current model for a fresh result."}
-          </p>
-          <button
-            onclick={() => queue(false)}
-            disabled={!enabled || working || editing || selected.processor !== null}
-            ><Icon name="retry" size={15} /> Retry</button
-          ><button onclick={() => queue(true)} disabled={!enabled || working || editing}
-            ><Icon name="spark" size={15} /> Reprocess</button
-          >
+          <div class="preview-image">
+            {#if image}<img
+                src={image}
+                alt={"Preview of " + selected.relativePath}
+                onerror={() => {
+                  image = "";
+                  imageError = "This image could not be displayed.";
+                }}
+              />{:else}<div class="preview-placeholder">
+                <Icon name="image" size={30} />
+                <p>{imageError || "Loading preview…"}</p>
+              </div>{/if}
+          </div>
+          <div class="text-heading">
+            <h3 id="extracted-text-heading">Extracted Text</h3>
+            {#if !editing}<button
+                onclick={() => {
+                  editing = true;
+                  text = selected?.text ?? "";
+                  notice = "";
+                }}
+                disabled={!enabled || working}>Edit Text</button
+              >{/if}
+          </div>
+          <section class="text-panel" aria-labelledby="extracted-text-heading">
+            {#if editing}<label class="sr-only" for="image-text">Image text</label><textarea
+                id="image-text"
+                bind:value={text}
+                rows="8"
+                disabled={working}></textarea>
+              <div class="edit-actions">
+                <span>Saved directly inside this image.</span><button
+                  onclick={() => {
+                    editing = false;
+                    text = selected?.text ?? "";
+                  }}>Discard Text Changes</button
+                ><button class="primary" onclick={saveText} disabled={!textDirty || working}
+                  >{working ? "Saving…" : "Save Text"}</button
+                >
+              </div>
+            {:else}<pre
+                class="extracted-text">{#if selected.text === null}This image is awaiting extraction.{:else if selected.text === ""}Processed successfully; no readable text found.{:else}<SearchHighlight
+                    text={selected.text}
+                    query={highlightQuery}
+                    fuzzy={highlightFuzzy}
+                  />{/if}</pre>{/if}
+            <div class="processing-actions">
+              <p>
+                {!enabled
+                  ? "Enable this watched folder to edit or process its images."
+                  : "Reprocess asks the current model for a fresh result."}
+              </p>
+              <button
+                onclick={() => queue(false)}
+                disabled={!enabled || working || editing || selected.processor !== null}
+                ><Icon name="retry" size={15} /> Retry</button
+              ><button onclick={() => queue(true)} disabled={!enabled || working || editing}
+                ><Icon name="spark" size={15} /> Reprocess</button
+              >
+            </div>
+            <details>
+              <summary>File Details</summary>
+              <dl>
+                <dt>Image SHA-256</dt>
+                <dd>{selected.imageHash}</dd>
+                <dt>Processor</dt>
+                <dd>{selected.processor ?? "None"}</dd>
+              </dl>
+            </details>
+          </section>
         </div>
-        <details>
-          <summary>File Details</summary>
-          <dl>
-            <dt>Image SHA-256</dt>
-            <dd>{selected.imageHash}</dd>
-            <dt>Processor</dt>
-            <dd>{selected.processor ?? "None"}</dd>
-          </dl>
-        </details>
       {:else}<div class="empty-detail">
           <Icon name="image" size={36} />
           <p>Select an image to inspect its text.</p>
         </div>{/if}
     </section>
   </div>
-</dialog>
+</section>
 
 <style>
-  dialog {
+  .inspector-ui {
     --control-font-size: var(--font-size-sm);
     --control-font-weight: 400;
     --control-padding: 7px 11px;
     --disabled-opacity: 0.5;
     --field-padding: 9px 10px;
     --field-border-color: var(--border, #dce4db);
-    padding: 0;
-    width: min(1100px, calc(100vw - 44px));
-    max-width: none;
-    height: min(780px, calc(100dvh - 76px));
-    max-height: none;
-    border: 1px solid var(--border, #dce4db);
-    border-radius: 12px;
-    background: var(--surface, white);
-    color: var(--text, #253b35);
-    box-shadow: 0 24px 90px #0005;
-    overflow: hidden;
-  }
-  dialog[open] {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
   }
-  dialog::backdrop {
-    background: #0e1b146b;
-  }
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 18px;
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border, #e2e7dd);
-  }
-  h2,
   h3,
   p {
     margin: 0;
   }
-  h2 {
-    font-size: 20px;
-  }
   h3 {
     font-size: var(--font-size-lg);
   }
-  .eyebrow {
-    font-size: var(--font-size-xs);
-    letter-spacing: 1.4px;
-    color: var(--subtle, #7a897f);
-  }
   .inspector-body {
-    display: flex;
-    min-height: 0;
+    display: grid;
+    grid-template-columns: 245px minmax(0, 1fr);
+    min-height: 420px;
     flex: 1;
+    overflow: hidden;
+    border: 1px solid var(--border, #dce4db);
+    border-radius: 0 0 9px 9px;
+    background: var(--surface, white);
   }
   .file-list {
-    width: 245px;
-    flex-shrink: 0;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     padding: 18px 12px;
     background: var(--surface-soft, #f5f6f1);
     border-right: 1px solid var(--border, #e2e7dd);
   }
-  form label {
-    display: block;
-    font-size: var(--font-size-sm);
-    margin-bottom: 7px;
-    color: var(--muted, #637568);
-  }
-  .filter-row {
-    display: flex;
-    align-items: center;
-    height: 44px;
-    border: 1px solid var(--border, #dce4db);
-    border-radius: 8px;
-    background: var(--field-bg, #fdfefb);
-  }
-  .filter-row:focus-within {
-    border-color: var(--focus, #2d806b);
-    box-shadow: 0 0 0 1px var(--focus, #2d806b);
-  }
-  .filter-row input {
-    flex: 1;
-    width: 0;
-    height: 100%;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    appearance: none;
-  }
-  .filter-row input:focus-visible {
-    outline: none;
-  }
-  .filter-row button {
-    flex: 0 0 32px;
-    height: 32px;
-    margin-right: 3px;
-    padding: 0;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-  }
-  .filter-row button:hover:not(:disabled) {
-    background: var(--surface-hover, #eff4ed);
-  }
-  .filter-row button:focus-visible {
-    outline-offset: -3px;
-  }
   .list-meta {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin: 12px 3px 7px;
+    margin: 0 3px 7px;
     font-size: var(--font-size-xs);
     color: var(--muted, #637568);
   }
@@ -511,16 +497,27 @@
     padding: 5px;
   }
   .file-detail {
-    flex: 1;
+    container: inspector-detail / inline-size;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
+    min-height: 0;
     padding: 22px;
     overflow-y: auto;
   }
   .detail-heading {
+    grid-area: image-heading;
     display: flex;
     gap: 12px;
     align-items: flex-start;
     justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .detail-heading > div {
+    min-width: 0;
+  }
+  .detail-heading h3 {
+    overflow-wrap: anywhere;
   }
   .detail-heading p {
     margin-top: 5px;
@@ -537,19 +534,35 @@
     border-radius: 5px;
     color: var(--accent-text, #527344);
   }
+  .detail-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "image-heading" "preview" "text-heading" "text";
+    gap: 16px 24px;
+  }
+  .text-panel {
+    grid-area: text;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
   .preview-image {
-    margin: 18px 0;
+    grid-area: preview;
+    position: relative;
     display: grid;
     place-items: center;
-    min-height: 180px;
+    height: 320px;
     padding: 20px;
     border: 1px solid var(--border, #dce4db);
     border-radius: 8px;
     background: var(--canvas, #fafbf9);
   }
   .preview-image img {
-    max-width: 100%;
-    max-height: 280px;
+    position: absolute;
+    inset: 20px;
+    width: calc(100% - 40px);
+    height: calc(100% - 40px);
     object-fit: contain;
   }
   .preview-placeholder {
@@ -561,10 +574,12 @@
     margin-top: 8px;
   }
   .text-heading {
+    grid-area: text-heading;
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
+    align-items: flex-start;
+    gap: 12px;
+    flex-shrink: 0;
   }
   .extracted-text {
     min-height: 70px;
@@ -592,6 +607,7 @@
     gap: 9px;
     align-items: center;
     margin-top: 10px;
+    flex-shrink: 0;
   }
   .edit-actions > span {
     flex: 1;
@@ -605,6 +621,7 @@
     gap: 8px;
     padding: 17px 0;
     border-bottom: 1px solid var(--border-soft, #eef1e9);
+    flex-shrink: 0;
   }
   .processing-actions p {
     flex: 1;
@@ -616,6 +633,7 @@
     margin-top: 13px;
     font-size: var(--font-size-sm);
     color: var(--muted, #637568);
+    flex-shrink: 0;
   }
   dl {
     display: grid;
@@ -632,7 +650,7 @@
   .notice {
     border: 0;
     flex-shrink: 0;
-    margin: 12px 16px;
+    margin: 0 0 16px;
     padding: 12px 14px;
     display: flex;
     align-items: center;
@@ -689,24 +707,60 @@
     overflow: hidden;
     clip-path: inset(50%);
   }
-  @media (max-width: 760px) {
-    dialog {
-      width: calc(100vw - 24px);
+  @container inspector-detail (min-width: 760px) {
+    .detail-content {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-areas: "image-heading text-heading" "preview text";
+      flex: 1;
+      min-height: 360px;
     }
-    .file-list {
-      width: 170px;
+    .preview-image {
+      height: auto;
+      min-height: 0;
+    }
+    .extracted-text,
+    textarea {
+      flex: 1;
+      min-height: 160px;
+      overflow: auto;
+    }
+  }
+  @media (max-width: 760px) {
+    .inspector-body {
+      grid-template-columns: 190px minmax(0, 1fr);
     }
     .file-detail {
       padding: 15px;
-    }
-    header {
-      padding: 15px 18px;
     }
     .detail-heading {
       flex-wrap: wrap;
     }
     .preview-image {
       padding: 14px;
+    }
+    .preview-image img {
+      inset: 14px;
+      width: calc(100% - 28px);
+      height: calc(100% - 28px);
+    }
+  }
+  @media (max-width: 600px) {
+    .inspector-body {
+      grid-template-columns: minmax(0, 1fr);
+      flex: none;
+      min-height: 0;
+      overflow: visible;
+    }
+    .file-list {
+      border-right: 0;
+      border-bottom: 1px solid var(--border, #e2e7dd);
+    }
+    .file-buttons {
+      max-height: 200px;
+    }
+    .file-detail {
+      overflow: visible;
     }
   }
 </style>

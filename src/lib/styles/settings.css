@@ -133,6 +133,19 @@
     margin: 0 auto;
     flex: 1;
   }
+  main.inspecting {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-width: none;
+    padding: 24px clamp(14px, 2vw, 32px);
+  }
+  main.inspecting .page-header {
+    margin-bottom: 20px;
+  }
+  .inspection-back {
+    margin-bottom: 12px;
+  }
   .page-header {
     display: flex;
     align-items: center;

@@ -15,6 +15,8 @@ import type {
   WatchStatus,
   ExtractionSettings,
   ModelCatalog,
+  MaintenanceStatus,
+  MaintenanceReport,
 } from "$lib/generated/core";
 export type * from "$lib/generated/core";
 
@@ -25,14 +27,18 @@ export const retryDaemon = () => invoke<DaemonStatus>("retry_daemon");
 export const discoverModels = (settings: ExtractionSettings) =>
   invoke<ModelCatalog>("discover_llm_models", { settings });
 export const prepareUpdateInstall = () => invoke<void>("prepare_update_install");
+export const maintenanceStatus = () => invoke<MaintenanceStatus>("maintenance_status");
+export const backupDatabase = (path: string) => invoke<void>("backup_database", { path });
+export const rebuildIndex = () => invoke<MaintenanceReport>("rebuild_index");
+export const cleanupCache = () => invoke<number>("cleanup_cache");
 
 export const scanFolder = (path: string) => invoke<ScanReport>("scan_folder", { path });
 export const listFolders = () => invoke<FolderRecord[]>("list_folders");
 export const folderSnapshot = (folderId: number) =>
   invoke<FolderSnapshot>("folder_snapshot", { folderId });
 export const fileDetails = (fileId: number) => invoke<FileDetails>("file_details", { fileId });
-export const listFiles = (folderId: number, query = "", offset = 0) =>
-  invoke<FilePage>("list_files", { folderId, query, offset });
+export const listFiles = (folderId: number, query = "", offset = 0, fuzzy = false) =>
+  invoke<FilePage>("list_files", { folderId, query, offset, fuzzy });
 export const filePreview = (fileId: number) => invoke<string>("file_preview", { fileId });
 export const queueFile = (file: FileRecord, force: boolean) =>
   invoke<DaemonStatus>("queue_file", { fileId: file.id, expectedImageHash: file.imageHash, force });

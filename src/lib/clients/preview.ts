@@ -2,6 +2,7 @@
 import type { FileDetails, FileRecord } from "../generated/core";
 import type { AppClient } from "./types";
 import { applyPreviewSettings, createPreviewStatus } from "./fixtures";
+import { previewSearchRank } from "./preview-search";
 
 const receipt = `<svg xmlns="http://www.w3.org/2000/svg" width="244" height="236" viewBox="0 0 244 236"><rect width="244" height="236" fill="#f8f6ee"/><g fill="#3d4439" font-family="Consolas,monospace" font-size="11"><text x="22" y="35" font-weight="bold">THE COFFEE SHOP</text><text x="22" y="58">October 2, 2026</text><path d="M22 75H222M22 144H222" stroke="#aab49f" stroke-dasharray="4 3"/><text x="22" y="99">Flat White</text><text x="184" y="99">$4.50</text><text x="22" y="121">Croissant</text><text x="184" y="121">$3.00</text><text x="22" y="168" font-weight="bold">Total</text><text x="184" y="168" font-weight="bold">$7.50</text><text x="122" y="206" text-anchor="middle">Thank you!</text></g></svg>`;
 
@@ -47,6 +48,7 @@ export function createPreviewClient(): AppClient {
   let status = createPreviewStatus(),
     revision = 0;
   const folders = new Map<number, FileDetails[]>();
+  let unusedCache = 12;
   const files = (folderId: number) => {
     if (!folders.has(folderId)) folders.set(folderId, sampleFiles(folderId));
     return folders.get(folderId)!;
@@ -92,11 +94,63 @@ export function createPreviewClient(): AppClient {
     async onError() {
       return () => {};
     },
-    async listFiles(folderId, query, offset) {
-      const matches = files(folderId).filter((entry) =>
-        entry.relativePath.toLowerCase().includes(query.toLowerCase()),
-      );
-      return structuredClone({ files: matches.slice(offset, offset + 50), total: matches.length });
+    async listFiles(folderId, query, offset, fuzzy = false) {
+      if (new TextEncoder().encode(query).length > 1024)
+        throw new Error("file search exceeds 1024 bytes");
+      query = query.trim();
+      const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
+      const fallback =
+        fuzzy && (terms.length > 8 || terms.some((term) => Array.from(term).length > 64));
+      const notice = fallback
+        ? "Showing exact matches: fuzzy search supports up to 8 words of 64 characters each"
+        : null;
+      const matches = files(folderId)
+        .map((entry) => ({
+          entry,
+          rank: previewSearchRank(
+            entry.relativePath,
+            entry.text,
+            query,
+            fuzzy && !fallback,
+            fallback,
+          ),
+        }))
+        .filter((match) => match.rank !== null)
+        .sort(
+          (left, right) =>
+            left.rank! - right.rank! ||
+            (left.entry.relativePath < right.entry.relativePath
+              ? -1
+              : left.entry.relativePath > right.entry.relativePath
+                ? 1
+                : 0),
+        )
+        .map(({ entry }) => entry);
+      return structuredClone({
+        files: matches.slice(offset, offset + 50),
+        total: matches.length,
+        notice,
+      });
+    },
+    async maintenanceStatus() {
+      return {
+        indexedFiles: 148,
+        cachedExtractions: 136 + unusedCache,
+        unusedCachedExtractions: unusedCache,
+        cacheBytes: 28000,
+      };
+    },
+    async chooseBackupPath() {
+      return "lenscribe-preview-backup.lenscribe-backup";
+    },
+    async backupDatabase() {},
+    async rebuildIndex() {
+      return { scannedFolders: 2, changedFiles: 0, removedFiles: 0, issues: [] };
+    },
+    async cleanupCache() {
+      const removed = unusedCache;
+      unusedCache = 0;
+      return removed;
     },
     async fileDetails(fileId) {
       return structuredClone(file(fileId));

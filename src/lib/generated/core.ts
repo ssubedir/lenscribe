@@ -6,7 +6,7 @@ export type FileRecord = { id: number, folderId: number, relativePath: string, i
 
 export type FileDetails = { text: string | null, id: number, folderId: number, relativePath: string, imageHash: string, imageLength: number, textHash: string | null, recordHash: string, processor: string | null, };
 
-export type FilePage = { files: Array<FileRecord>, total: number, };
+export type FilePage = { files: Array<FileRecord>, total: number, notice: string | null, };
 
 export type FolderSnapshot = { folder: FolderRecord, files: Array<FileRecord>, };
 
@@ -15,6 +15,12 @@ export type ScanIssue = { path: string, error: string, };
 export type ScanReport = { folder: FolderRecord, changed: number, removed: number, inspected: number, issues: Array<ScanIssue>, };
 
 export type SearchHit = { folderPath: string, snippet: string, id: number, folderId: number, relativePath: string, imageHash: string, imageLength: number, textHash: string | null, recordHash: string, processor: string | null, };
+
+export type SearchPage = { hits: Array<SearchHit>, total: number, fuzzyApplied: boolean, notice: string | null, };
+
+export type MaintenanceStatus = { indexedFiles: number, cachedExtractions: number, unusedCachedExtractions: number, cacheBytes: number, };
+
+export type MaintenanceReport = { scannedFolders: number, changedFiles: number, removedFiles: number, issues: Array<ScanIssue>, };
 
 export type WatchStatus = { folderId: number, path: string, lastError: string | null, };
 

@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "$lib/core";
 import type { AppClient } from "./types";
@@ -32,6 +32,16 @@ export function createDesktopClient(): AppClient {
     fileDetails: core.fileDetails,
     filePreview: core.filePreview,
     discoverModels: core.discoverModels,
+    maintenanceStatus: core.maintenanceStatus,
+    backupDatabase: core.backupDatabase,
+    rebuildIndex: core.rebuildIndex,
+    cleanupCache: core.cleanupCache,
+    chooseBackupPath: () =>
+      saveDialog({
+        title: "Export Lenscribe database backup",
+        defaultPath: `lenscribe-backup-${Date.now()}.lenscribe-backup`,
+        filters: [{ name: "Lenscribe backup", extensions: ["lenscribe-backup"] }],
+      }),
     async editFile(file, text) {
       return {
         file: await core.editFile(file, text),

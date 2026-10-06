@@ -1,0 +1,42 @@
+[package]
+name = "lenscribe-core"
+version = "0.1.2"
+edition = "2021"
+description = "Image text trailers, Merkle tracking, and local search for Lenscribe"
+
+[features]
+default = ["legacy-sqlite"]
+legacy-sqlite = ["dep:rusqlite"]
+bindings = ["dep:ts-rs"]
+
+[[bin]]
+name = "export-bindings"
+required-features = ["bindings"]
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+genai = { version = "0.6.5", default-features = false, features = ["native-tls"] }
+hex = "0.4"
+log = "0.4"
+globset = "0.4"
+notify = "8"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json"] }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+wedb_embed = "=0.1.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-normalization = "0.1"
+url = "2"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+walkdir = "2"
+ts-rs = { version = "12", optional = true, features = ["no-serde-warnings"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+image-webp = "0.2.4"
+png = "0.18"
+tower = { version = "0.5", features = ["util"] }

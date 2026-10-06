@@ -1,26 +1,79 @@
 name: CI
+run-name: "CI / ${{ github.event.issue.pull_request && format('PR #{0}', github.event.issue.number) || github.ref_name }}"
 
-on:
+"on":
   workflow_dispatch:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  source:
+    name: Select CI source
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request && github.event.comment.body == '/ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      pr: ${{ steps.source.outputs.pr }}
+    steps:
+      # These API-only jobs never check out or execute pull-request code.
+      - name: Authorize request and pin source commit
+        id: source
+        uses: actions/github-script@v8
+        with:
+          script: |
+            let commit = context.sha;
+            let number = '';
+            if (context.eventName === 'issue_comment') {
+              const { issue, comment } = context.payload;
+              if (!issue.pull_request || comment.body !== '/ci') return;
+              const { data: access } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo, username: comment.user.login,
+              });
+              if (!['admin', 'write'].includes(access.permission)) {
+                throw new Error('Only maintainers with repository write access can request CI.');
+              }
+              const { data: pr } = await github.rest.pulls.get({
+                ...context.repo, pull_number: issue.number,
+              });
+              if (pr.state !== 'open') throw new Error('CI requests require an open pull request.');
+              commit = pr.head.sha;
+              number = String(issue.number);
+              await github.rest.repos.createCommitStatus({
+                ...context.repo, sha: commit, context: 'CI / Manual PR', state: 'pending',
+                description: 'Manual CI is running',
+                target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              });
+            }
+            core.setOutput('commit', commit);
+            core.setOutput('pr', number);
+            core.info(`Testing ${number ? `PR #${number}` : context.ref} at ${commit}.`);
+
   frontend:
     name: Frontend and formatting
+    needs: source
+    if: needs.source.outputs.commit != ''
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    concurrency:
+      group: ci-frontend-${{ needs.source.outputs.pr || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
@@ -33,6 +86,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: ci-frontend
+          save-if: ${{ needs.source.outputs.pr == '' }}
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
       - name: Check generated types and frontend
@@ -50,9 +104,12 @@ jobs:
 
   native:
     name: Native / ${{ matrix.name }}
-    needs: frontend
+    needs: [source, frontend]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    concurrency:
+      group: ci-native-${{ matrix.runner }}-${{ needs.source.outputs.pr || github.ref }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
@@ -87,11 +145,50 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: ci-${{ matrix.runner }}
+          save-if: ${{ needs.source.outputs.pr == '' }}
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-features --locked
+      - name: Test core without SQLite migration support
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --no-default-features --locked
       - name: Lint Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
       - name: Build native app
         run: bun run tauri build --ci --debug --no-bundle -- --locked
+
+  result:
+    name: Report PR result
+    needs: [source, frontend, native]
+    if: ${{ always() && needs.source.result == 'success' && needs.source.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - uses: actions/github-script@v8
+        env:
+          CI_COMMIT: ${{ needs.source.outputs.commit }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        with:
+          script: |
+            const sha = process.env.CI_COMMIT;
+            const target_url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: statuses } = await github.rest.repos.listCommitStatusesForRef({
+              ...context.repo, ref: sha, per_page: 100,
+            });
+            const latest = statuses.find(status => status.context === 'CI / Manual PR');
+            if (latest?.target_url !== target_url) {
+              core.info('A newer CI request owns this commit status; leaving it unchanged.');
+              return;
+            }
+            const results = [process.env.FRONTEND_RESULT, process.env.NATIVE_RESULT];
+            const passed = results.every(result => result === 'success');
+            const state = passed ? 'success' : results.includes('failure') ? 'failure' : 'error';
+            const description = passed ? 'Frontend and all native targets passed'
+              : results.includes('failure') ? 'CI failed; open the run for details'
+              : 'CI was cancelled or did not complete';
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha, context: 'CI / Manual PR', state, description, target_url,
+            });

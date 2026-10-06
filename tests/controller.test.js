@@ -73,6 +73,24 @@ test("destroy ignores in-flight responses and removes late subscriptions", async
   expect(removed).toBe(true);
 });
 
+test("the inspector opens under Watched Folders and navigation preserves settings drafts", async () => {
+  const model = new SettingsController();
+  model.start(createPreviewClient());
+  await model.refresh();
+  if (!model.draft) throw new Error("Settings did not load");
+  model.draft.theme = "dark";
+  const inspection = { folderId: 1, name: "Screenshots", enabled: true, initialPath: "receipt" };
+  model.inspect(inspection);
+  expect(model.page).toBe("folders");
+  expect(model.inspecting).toEqual(inspection);
+  model.navigate("overview");
+  expect(model.inspecting).toBeNull();
+  expect(model.page).toBe("overview");
+  expect(model.draft.theme).toBe("dark");
+  expect(model.dirty).toBe(true);
+  model.destroy();
+});
+
 test("installing an update blocks settings, retries, navigation and polling", async () => {
   const client = createPreviewClient();
   const model = new SettingsController();
@@ -83,10 +101,12 @@ test("installing an update blocks settings, retries, navigation and polling", as
   if (!model.draft) throw new Error("Settings did not load");
   model.draft.theme = "dark";
   model.navigate("folders");
+  model.inspect({ folderId: 1, name: "Screenshots", enabled: true });
   model.discard();
   await model.save();
   await model.retry();
   expect(model.page).toBe("overview");
+  expect(model.inspecting).toBeNull();
   expect(model.busy).toBe("update");
   expect((await client.status()).settings).toEqual(before.settings);
   model.updateInstalling(false);

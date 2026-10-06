@@ -24,6 +24,40 @@ describe("preview client", () => {
     expect((await client.listFiles(1, "", 50)).files).toHaveLength(0);
   });
 
+  test("searches extracted text and supports optional word prefixes and typos", async () => {
+    const client = createPreviewClient();
+    expect((await client.listFiles(1, "  CROISSANT  ", 0)).files.map((file) => file.id)).toEqual([
+      101,
+    ]);
+    expect((await client.listFiles(1, "cofee", 0)).total).toBe(0);
+    for (const query of ["cofee", "cofffee", "xoffee", "cofefe", "reciept", "receipt coff"])
+      expect((await client.listFiles(1, query, 0, true)).files.map((file) => file.id)).toEqual([
+        101,
+      ]);
+    expect((await client.listFiles(1, "receipt Friday", 0, true)).total).toBe(0);
+    expect((await client.listFiles(1, "unrelated", 0, true)).total).toBe(0);
+    expect((await client.listFiles(1, "%", 0, true)).total).toBe(0);
+    expect((await client.listFiles(1, "  ", 0, true)).total).toBe(3);
+    expect((await client.listFiles(1, "new-imag", 0, true)).files[0].processor).toBeNull();
+  });
+
+  test("search results use current edited text and prefer exact filenames", async () => {
+    const client = createPreviewClient();
+    await client.editFile(await client.fileDetails(102), "Receipt with coffee on Friday");
+    expect((await client.listFiles(1, "receipt", 0, true)).files.map((file) => file.id)).toEqual([
+      101, 102,
+    ]);
+    await client.editFile(await client.fileDetails(101), "Café λογος");
+    expect((await client.listFiles(1, "croissant", 0, true)).total).toBe(0);
+    expect((await client.listFiles(1, "cafe", 0, true)).files.map((file) => file.id)).toEqual([
+      101,
+    ]);
+    expect((await client.listFiles(1, "λογοσ", 0, true)).files.map((file) => file.id)).toEqual([
+      101,
+    ]);
+    expect((await client.listFiles(1, "cat", 0, true)).total).toBe(0);
+  });
+
   test("rejects stale edits and reprocessing preserves existing text", async () => {
     const client = createPreviewClient();
     const original = await client.fileDetails(101);
@@ -33,6 +67,26 @@ describe("preview client", () => {
     await client.queueFile(result.file, true, true);
     expect((await client.fileDetails(101)).text).toBe("Corrected receipt");
     expect((await client.filePreview(101)).startsWith("data:image/svg+xml")).toBe(true);
+  });
+
+  test("oversized fuzzy queries retain exact matches and maintenance stays isolated", async () => {
+    const client = createPreviewClient();
+    const text = "one two three four five six seven eight nine";
+    await client.editFile(await client.fileDetails(101), text);
+    const result = await client.listFiles(1, text, 0, true);
+    expect(result.total).toBe(1);
+    expect(result.notice).toContain("Showing exact matches");
+    const before = await client.maintenanceStatus();
+    expect(await client.cleanupCache()).toBe(before.unusedCachedExtractions);
+    expect((await client.maintenanceStatus()).unusedCachedExtractions).toBe(0);
+    expect((await createPreviewClient().maintenanceStatus()).unusedCachedExtractions).toBe(
+      before.unusedCachedExtractions,
+    );
+    const backupPath = await client.chooseBackupPath();
+    if (!backupPath) throw new Error("Preview must provide a backup path");
+    await client.backupDatabase(backupPath);
+    expect((await client.rebuildIndex()).issues).toEqual([]);
+    expect((await client.fileDetails(101)).text).toBe(text);
   });
 });
 

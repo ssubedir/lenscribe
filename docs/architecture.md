@@ -6,33 +6,93 @@ Lenscribe is one desktop process with a Rust engine and a Svelte settings window
 
 ## Code layout
 
-| Path | Responsibility |
-| --- | --- |
-| `src-tauri/crates/lenscribe-core/src/lib.rs` | Core operations, path validation, and serialized writes |
-| `src-tauri/crates/lenscribe-core/src/trailer.rs` | Image detection, original bytes, and text trailer reads/writes |
-| `src-tauri/crates/lenscribe-core/src/scan.rs` | Folder rules, scan state, and incremental reconciliation |
-| `src-tauri/crates/lenscribe-core/src/merkle.rs` | Directory Merkle tree |
-| `src-tauri/crates/lenscribe-core/src/database.rs` | SQLite connection ownership and scan transactions |
-| `src-tauri/crates/lenscribe-core/src/database/` | Repositories for folders, files, search, extraction cache, jobs, and recovery |
-| `src-tauri/crates/lenscribe-core/migrations/` | Numbered SQL schema upgrades |
-| `src-tauri/crates/lenscribe-core/src/daemon.rs` | Settings and background lifecycle |
-| `src-tauri/crates/lenscribe-core/src/extraction.rs` | Concurrent extraction, cancellation, pacing, and retries |
-| `src-tauri/crates/lenscribe-core/src/llm.rs` | Vision requests through `genai` and completion validation |
-| `src-tauri/crates/lenscribe-core/src/llm/connection.rs` | Bounded provider model discovery |
-| `src-tauri/crates/lenscribe-core/src/http.rs` | Read-only loopback API |
-| `src-tauri/src/commands.rs` | Tauri adapters; file work runs off the UI thread |
-| `src/lib/core.ts` | Typed Tauri command and event wrappers |
-| `src/lib/clients/` | Desktop, updater, and isolated preview adapters |
-| `src/lib/settings/controller.svelte.ts` | Live status, editable drafts, validation, and Save/Discard |
-| `src/lib/components/settings/` | Settings screens |
-| `src/lib/components/FileInspector.svelte` | Image preview, text editing, and reprocessing |
-| `src/lib/styles/` | Shared typography, controls, and layout |
+```text
+src-tauri/
+├── crates/                  # Rust engine
+│   ├── src/
+│   │   ├── domain/          # Values, Merkle trees, and business rules
+│   │   ├── application/     # Scanning, extraction, search, and maintenance
+│   │   ├── ports/           # Storage, filesystem, vision, settings, and watcher contracts
+│   │   ├── adapters/        # WeDB, filesystem, LLM, and HTTP implementations
+│   │   └── runtime/         # Daemon lifecycle and background coordination
+│   ├── migrations/          # Legacy SQLite schemas for migration fixtures
+│   └── tests/               # Core integration tests
+└── src/                     # Tauri entry point and desktop commands
+
+src/
+└── lib/                     # Svelte frontend and typed core wrappers
+    ├── clients/             # Desktop, updater, and preview adapters
+    ├── settings/            # Live status, drafts, and validation
+    ├── components/          # Settings screens and file inspector
+    ├── generated/           # Rust-generated TypeScript bindings
+    └── styles/              # Shared typography, controls, and layout
+```
 
 Rust's serialized DTOs are the source of truth for `src/lib/generated/core.ts`, generated through [ts-rs](https://github.com/Aleph-Alpha/ts-rs). After changing a DTO, run `bun run types:generate`. `bun run check` verifies the contract before checking Svelte. Do not edit generated bindings manually.
 
-Database migrations apply only missing versions and commit each schema change with its version. Opening a database from a newer schema fails without modifying it.
+### Ports and adapters
 
-The database owns one SQLite connection behind the core's mutex. Repositories borrow that connection and keep SQL and row decoding within the persistence layer. Core operations choose the repository they need, such as `database.files().get(id)` or `database.jobs().list(folder_id)`. Scan reconciliation coordinates all repository writes in one transaction, so file records, FTS triggers, cached text, stale jobs and failures, and the Merkle root commit or roll back together. Failure records and endpoint recovery state also share a transaction. The public core API and schema remain independent of this internal layout.
+The domain contains business values and policies without filesystem, database, or network operations. Application services orchestrate those values through ports. Concrete adapters depend inward on those contracts. The outer daemon runtime coordinates long-lived tasks and the optional HTTP transport. Default constructors are wired in `composition.rs`; the application layer does not construct WeDB, `genai`, or native watcher instances.
+
+```mermaid
+flowchart LR
+    Entry["Tauri, HTTP, filesystem events"] --> Application["Application use cases"]
+    Application --> Domain["Domain values and policies"]
+    Application --> Ports["I/O ports"]
+    Adapters["WeDB, files, genai, JSON settings"] -. implement .-> Ports
+    Wiring["Composition and daemon runtime"] --> Application
+    Wiring --> Adapters
+```
+
+`Core::new` accepts the index repository, image filesystem, watcher, and vision factory. `Daemon::new` accepts a settings store. `Core::open` and `Daemon::load` provide the existing default wiring. Image traversal remains lazy, excluded directories are pruned by the filesystem adapter, and path safety is enforced there before image reads and writes. Settings values validate syntax and policies in the domain; the JSON adapter also checks canonical folder aliases when loading or saving.
+
+The index port separates catalog, extraction queue, recovery, and maintenance capabilities, but one repository instance owns them all. Scans and response/failure updates retain their atomic commits and the core's existing serialization lock. Ports expose those operations rather than WeDB keys or generic database transactions. A replacement repository must preserve the same durability and generation checks.
+
+Add new business policies to `domain`, workflows to `application`, and external integrations to `adapters`. Keep concrete wiring in `composition` or `runtime`. The adapter-injection tests exercise background processing with an in-memory settings store and a fake vision provider, plus image-write failure recovery through a replaced filesystem port.
+
+Canonical storage uses a versioned Lenscribe keyspace in WeDB. An unsupported schema is rejected. The one-time importer reads a consistent SQLite transaction, preserves IDs, text, cache, queue generations, retries, and Merkle roots, validates references and hashes, then commits the imported records and schema marker together. It never updates or removes the original SQLite database. The default `legacy-sqlite` feature supplies this reader; `--no-default-features` builds the core without SQLite. Existing data requiring migration is rejected when that feature is absent.
+
+The storage facade sits behind the core mutex, which serializes mutations including read/modify/write operations. Repositories expose application operations such as file lookup, queue claims, response saving, and failure recording. Canonical records use an application-owned keyspace rather than WeDB internal Redis encodings. A scan batches file records, immutable text bodies, cache pointers, stale-job cleanup, Merkle checkpoints, and the folder root atomically. Failure records and endpoint state also share a batch. Each critical batch is followed by `persist()` (Fjall `SyncAll`); projections become visible only after that sync succeeds. A failed sync stops further writes until reopening.
+
+The desktop profile budgets 32 MiB for the block cache, 8 MiB for data memtables, 4 MiB for metadata memtables, 128 MiB for journal rotation, and two background workers. These are storage budgets, not a total RAM limit: metadata, queue projections, search postings, and transient operations also use memory. Fjall holds an exclusive database lock. Graceful daemon shutdown waits for extraction and API tasks and performs a final sync. Tauri, HTTP, and TypeScript contracts remain stable, and existing Rust module paths and facade methods remain available. Watcher and legacy database errors now carry messages instead of concrete adapter error types, keeping the shared error contract independent of `notify` and `rusqlite`.
+
+### Canonical key layout
+
+`wedb_embed` is pinned to `0.1.13` with its Fjall backend. Lenscribe uses the `lenscribe-v1` partition and schema version 1. Positive IDs are zero-padded to 20 digits; immutable text is addressed by its SHA-256 hash.
+
+| Key prefix                | Value                                                     |
+| ------------------------- | --------------------------------------------------------- |
+| `schema`, `seq/`          | Schema version and allocated folder/file/job IDs          |
+| `folders/`, `files/`      | Folder roots and per-file metadata                        |
+| `texts/`                  | Immutable extracted text bodies                           |
+| `cache/`                  | Image and processor identity pointing to a text hash      |
+| `jobs/`                   | Request generation, force flag, readiness time, and lease |
+| `results/`                | Saved response and expected image/record/request identity |
+| `failures/`, `endpoints/` | Per-file retries and provider backoff/pacing              |
+| `merkle/`                 | Directory checkpoints for each folder                     |
+
+Metadata, ready/deadline queues, vocabulary, and search postings are derived projections. Queue projections are retained only for the current provider recovery identity and rebuilt when it changes. Text bodies are fetched from storage for result pages and edits. Later embedding support can use the same immutable body identity without changing file identity or the trailer format.
+
+### Scale and recovery validation
+
+The ignored `adapters::wedb::database::tests::storage_scaling_probe` exercises 10,000 and 100,000 records. Set `LENSCRIBE_BENCH_FILES` to choose the count, then run:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --all-features --lib storage_scaling_probe -- --ignored --nocapture
+```
+
+Windows x64 debug measurements on October 5, 2026:
+
+| Files | Synced scan batch | Literal search page | Fuzzy search page | Ready 8 jobs, warm | Reopen and rebuild search | Sampled peak private memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 1.46 s | 26 ms | 34 ms | 5 µs | 1.54 s | 78.4 MiB |
+| 100,000 | 25.23 s | 780 ms | 1.04 s | 12 µs | 16.33 s | 719.1 MiB |
+
+These are regression probes, not production benchmarks or a total memory guarantee. Every synthetic record has a unique image hash and a distinct filename, but shares one short transcription to exercise deduplication. Searches return 50 snippets and count all matches; reopening excludes filesystem hashing and scans. Warm queue measurements exclude the initial projection build. Peak memory is sampled across the entire test process, including fixture vectors, two stores, transient batches, search projections, and the SQLite comparison. Larger unique transcriptions need additional memory. Background compilation was running during this sample; release builds and other machines need separate measurements.
+
+The SQLite fixture uses WAL with full sync and the previous FTS triggers/cache writes. Its 10,000/100,000-record batches took 1.12/21.20 seconds; literal count-only queries took 11/129 ms. It does not implement the same fuzzy, ranking, pagination, or snippet workload, so these numbers do not establish an overall speed advantage for either implementation. Search rebuild time and peak memory remain the main large-library limitations of the current WeDB integration.
+
+Tests also kill a subprocess after a synced response, reclaim its abandoned lease, reconcile a trailer written before acknowledgement, inject an uncertain sync failure, reject inconsistent backups, verify migration source preservation, and exercise live watchers and locked Windows files. CI checks both the default migration-enabled build and the SQLite-free core across the native platform matrix; cross-platform runs must be started manually.
 
 ## Image trailer format
 
@@ -64,23 +124,27 @@ Image identity is SHA-256 of every byte before the Lenscribe trailer. A file rec
 
 Directory nodes hash sorted `(child name, node kind, child hash)` entries with UTF-8 byte ordering, length-prefixed fields, and distinct versioned prefixes. Absolute paths, timestamps, empty directories, the database, and the stored root are excluded. Equal relative image trees have equal roots in different locations. Renames change roots while preserving image identity.
 
-The scanner keeps file metadata and the tree in memory. Watch events reconcile affected files or directory subtrees and update their ancestors. Text writes update one image's index entry. Events coalesce after 500 ms of quiet, with a 2-second maximum delay and at most 1024 retained paths. Overflow, unknown event paths, and watcher rescan notices request a full scan.
+The scanner keeps file metadata and the tree in memory. Changed directory checkpoints are persisted with canonical file records and the root. Checkpoints are validated against file records at startup; missing or inconsistent checkpoints are rebuilt. Startup still verifies image hashes, so a checkpoint never substitutes for checking offline filesystem changes. Watch events reconcile affected files or directory subtrees and update their ancestors. Text writes update one image's index entry. Events coalesce after 500 ms of quiet, with a 2-second maximum delay and at most 1024 retained paths. Overflow, unknown event paths, and watcher rescan notices request a full scan.
 
 A 30-second metadata reconciliation catches changes in names, sizes, and modification times without rereading unchanged images. Startup and explicit scans verify hashes. A missed write that preserves both size and modification time can escape metadata reconciliation until a full scan. Unchanged scans do not rewrite indexed records.
 
 Folder Rules apply to scanning, extraction preparation, and commits. Exclusion patterns use `/`, match without case sensitivity on Windows, and cannot escape the watched folder. Bare filenames match at every depth. Excluded files leave the index and queue without modifying their image or text; including them again imports existing trailers.
 
-Invalid files are reported as scan issues and excluded from the index. Directory traversal failures abort a scan instead of silently pruning an inaccessible subtree. Symbolic links are not followed.
+Invalid files are reported as scan issues and excluded from the index. Transient read errors, including Windows sharing locks, retain existing file records and Merkle entries until a later scan can read the image. Directory traversal failures abort a scan instead of silently pruning an inaccessible subtree. Symbolic links are not followed.
 
 ## Extraction and recovery
 
-The background controller polls pending records every half second. Concurrency defaults to one image and is bounded to 1–8. Requests per minute are bounded to 0–600, where zero is unrestricted. Request starts are evenly paced across workers; cache hits do not consume requests.
+WeDB is the durable queue. Rebuildable ready sets and deadline sets select only enough jobs to fill free worker slots, excluding active files, future retries, and permanent failures for the current provider configuration. Durable leases prevent duplicate claims and are reclaimed on reopening after the previous process exits. Mutations notify the worker; otherwise it waits for completion or the next deadline with a 30-second reconciliation fallback. Forced jobs take priority. Concurrency defaults to one image and is bounded to 1–8. Requests per minute are bounded to 0–600, where zero is unrestricted. Request starts are evenly paced across workers; cache hits do not consume requests.
 
-The persistent cache key combines the original image SHA-256 with a processor identifier containing the provider, model, endpoint, prompt, token limit, and extraction-format version. API keys and runtime pacing limits are excluded from this identity. Identical pending images share one in-flight request. Successful empty text is reusable. Manually edited text has a separate `manual/v1` identity. Forced reprocessing bypasses the cache.
+Before reading an image for extraction, the worker observes its size and modification time every 250 ms and requires one second of stability. A readiness check lasts at most five seconds. Images that remain unstable or locked are deferred for two seconds in WeDB, so they cannot monopolize the queue indefinitely. Deferrals preserve retry attempts and survive restarts. The image hash must still match the queued record after preparation, and commits retain their existing hash and request identity guards. Stability checks do not fully decode images or guarantee that a writer has finished after an unusually long pause.
+
+The persistent cache key combines the original image SHA-256 with a processor identifier containing the provider, model, endpoint, prompt, token limit, and extraction-format version. API keys and runtime pacing limits are excluded from this identity. Identical pending images share one in-flight request. Successful empty text is reusable. Manually edited text has a separate `manual/v1` identity. Forced reprocessing bypasses older reusable results while retaining its own saved response for write recovery. Extracted text bodies are immutable and addressed by SHA-256; file records and cache entries reference those bodies independently, so editing one image never changes another image with identical original bytes.
+
+Processing follows queued → leased → response saved → trailer written → complete. The response, cache pointer, and write intent are synced before modifying the image. Locked files and restarts reuse the saved response. A startup scan acknowledges an interrupted commit only when that generation's saved result exactly matches the image trailer. File writes and database batches are separate transactions; hash and generation guards reconcile them. Execution is at least once: a crash before the response is saved can require another model request.
 
 Only the original image bytes are sent to the vision model. The default prompt requests transcription in the original language and treats visible instructions as text. Valid empty text counts as processed. Truncated, filtered, refused, missing, or malformed responses leave the file unchanged and pending.
 
-Rate limits, timeouts, and server errors retry with exponential backoff, up to five attempts per image, honoring numeric `Retry-After` headers. Attempt counts, sanitized errors, retry times, endpoint backoff, and pacing persist in SQLite. Authentication or endpoint errors block requests until configuration changes or an explicit retry. Changing the API key creates a new recovery state without invalidating cached extraction results.
+Rate limits, timeouts, and server errors retry with exponential backoff, up to five attempts per image, honoring numeric `Retry-After` headers. Attempt counts, sanitized errors, retry times, endpoint backoff, and pacing persist in WeDB. Authentication or endpoint errors block requests until configuration changes or an explicit retry. Changing the API key creates a new recovery state without invalidating cached extraction results.
 
 Global **Retry extraction** resets failures and backoff while retaining pacing. Retrying a single file leaves other failures alone. **Reprocess** records a durable forced job; existing text stays readable until a fresh response succeeds. Older in-flight results cannot overwrite an updated image or manual edit.
 
@@ -107,9 +171,17 @@ Fetch Models requests provider catalogs or installed Ollama models, excludes mod
 
 ## Search and frontend boundaries
 
-SQLite FTS5 searches filenames and extracted text. Query terms are escaped as literals and combined with AND; results contain ranked snippets and are limited to 100. The HTTP layer runs blocking database operations off the async request thread. Its plain-text endpoint returns 404 when text is missing.
+The file inspector and HTTP API share one WeDB-backed search repository. WeDB's in-memory inverted index is rebuilt from canonical file records at startup. Shared text bodies are indexed once with a reverse mapping to files; filenames have separate documents. Unicode case and diacritic normalization is applied before indexing, and Lenscribe supplies ranking, bounded fuzzy expansion, pagination, and snippets. Search combines literal substrings in filenames and extracted text with automatic fuzzy matching, adding indexed word prefixes and up to one insertion, deletion, substitution, or adjacent swap for words of four or more characters. All query words must match the same file; exact filename matches precede exact text matches, followed by fuzzy matches. Results are ordered consistently by relative path, folder, and file ID within each rank. The inspector uses 50 results per page; the API accepts `offset` and a `limit` up to 100. `/search` retains its array response, while `/search/page` includes hits, total count, fuzzy status, and a fallback notice. Snippets are generated only for the current page. The HTTP layer runs blocking database operations off the async request thread. Its plain-text endpoint returns 404 when text is missing.
 
-The settings controller keeps live status separate from the editable draft. Polling cannot erase unsaved changes. Save applies configuration in Rust; Discard restores saved settings. Aggregate progress uses a grouped database query, including successful empty transcriptions.
+An ordered vocabulary follows the derived index, so edits, scans, and removals immediately affect searches without another persistent engine or model requests. Fuzzy queries support up to eight words of 64 characters each, scan at most 50,000 candidate dictionary words, and expand each word to at most 32 alternatives. When word or vocabulary limits are exceeded, matching falls back to exact AND terms and literal substrings with a notice. Inspector queries are limited to 1024 bytes and API queries to 4096 bytes. API callers can set `fuzzy=false` for literal substring matching. Semantic search and embeddings are not included.
+
+## Maintenance
+
+Backup exports a versioned JSON envelope with a SHA-256 checksum and all canonical records to a temporary file beside the chosen destination. The core database mutex keeps the logical export consistent; it does not copy a live LSM directory. The completed file is synced and published without overwriting an existing destination. Backups include the index, cached text, queue, and recovery state; images and settings are separate. `Core::restore_database(backup, new_directory)` validates the envelope, schema, references, IDs, and text hashes before restoring to a new directory; derived indexes are rebuilt. Existing destinations are rejected. No restore UI is included.
+
+Rebuilding refreshes the derived search index, scans known folders with their normal rules, re-imports current trailers, and rebuilds search again. Unavailable folders retain their existing records and produce per-folder issues. Scans and cache cleanup use the core's write serialization lock. Cache cleanup deletes only cache pointers whose image hash and processor are no longer referenced by indexed files. Text bodies still referenced by files or saved responses are retained. It never modifies images or their trailers.
+
+The settings controller keeps live status separate from the editable draft. Polling cannot erase unsaved changes. Save applies configuration in Rust; Discard restores saved settings. Aggregate progress uses the canonical metadata projection, including successful empty transcriptions.
 
 The preview adapter is loaded only in explicit development preview mode. Its files, edits, images, and settings stay in memory. Native dialogs, command invocations, and model requests belong to the desktop adapter.
 
