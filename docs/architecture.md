@@ -6,30 +6,27 @@ Lenscribe is one desktop process with a Rust engine and a Svelte settings window
 
 ## Code layout
 
-| Path | Responsibility |
-| --- | --- |
-| `src-tauri/crates/src/domain/` | Image and folder identities, Merkle trees, folder rules, configuration values, and search matching policies |
-| `src-tauri/crates/src/application/core.rs` | Index, search, image preparation, text editing, and extraction commit use cases |
-| `src-tauri/crates/src/application/scan.rs` | Scan state and incremental reconciliation through image and repository ports |
-| `src-tauri/crates/src/application/extraction.rs` | Concurrent extraction, cancellation, pacing, retries, and response recovery |
-| `src-tauri/crates/src/application/maintenance.rs` | Backup, trailer re-import, search rebuild, and cache cleanup workflows |
-| `src-tauri/crates/src/ports/` | Repository, image filesystem, vision provider, settings store, and watcher contracts |
-| `src-tauri/crates/src/adapters/wedb/` | Durable repository implementation, atomic batches, projections, backups, and legacy import |
-| `src-tauri/crates/src/adapters/filesystem/` | Safe paths, lazy traversal, image trailer I/O, JSON settings, and native watcher implementation |
-| `src-tauri/crates/src/adapters/llm.rs` | Vision provider adapter through `genai` and completion validation |
-| `src-tauri/crates/src/adapters/llm/connection.rs` | Bounded provider model discovery |
-| `src-tauri/crates/src/adapters/http.rs` | Read-only loopback transport calling application use cases |
-| `src-tauri/crates/src/runtime/daemon.rs` | Background lifecycle and settings, extraction, watcher, and HTTP coordination |
-| `src-tauri/crates/src/composition.rs` | Default adapter wiring for desktop and headless entry points |
-| `src-tauri/crates/src/lib.rs` | Public exports, including compatibility aliases for existing callers |
-| `src-tauri/crates/migrations/` | Legacy SQLite schemas used by migration fixtures |
-| `src-tauri/src/commands.rs` | Tauri adapters; file work runs off the UI thread |
-| `src/lib/core.ts` | Typed Tauri command and event wrappers |
-| `src/lib/clients/` | Desktop, updater, and isolated preview adapters |
-| `src/lib/settings/controller.svelte.ts` | Live status, editable drafts, validation, and Save/Discard |
-| `src/lib/components/settings/` | Settings screens |
-| `src/lib/components/FileInspector.svelte` | Image preview, text editing, and reprocessing |
-| `src/lib/styles/` | Shared typography, controls, and layout |
+```text
+src-tauri/
+├── crates/                  # Rust engine
+│   ├── src/
+│   │   ├── domain/          # Values, Merkle trees, and business rules
+│   │   ├── application/     # Scanning, extraction, search, and maintenance
+│   │   ├── ports/           # Storage, filesystem, vision, settings, and watcher contracts
+│   │   ├── adapters/        # WeDB, filesystem, LLM, and HTTP implementations
+│   │   └── runtime/         # Daemon lifecycle and background coordination
+│   ├── migrations/          # Legacy SQLite schemas for migration fixtures
+│   └── tests/               # Core integration tests
+└── src/                     # Tauri entry point and desktop commands
+
+src/
+└── lib/                     # Svelte frontend and typed core wrappers
+    ├── clients/             # Desktop, updater, and preview adapters
+    ├── settings/            # Live status, drafts, and validation
+    ├── components/          # Settings screens and file inspector
+    ├── generated/           # Rust-generated TypeScript bindings
+    └── styles/              # Shared typography, controls, and layout
+```
 
 Rust's serialized DTOs are the source of truth for `src/lib/generated/core.ts`, generated through [ts-rs](https://github.com/Aleph-Alpha/ts-rs). After changing a DTO, run `bun run types:generate`. `bun run check` verifies the contract before checking Svelte. Do not edit generated bindings manually.
 
