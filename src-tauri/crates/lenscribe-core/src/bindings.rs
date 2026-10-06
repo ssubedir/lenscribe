@@ -9,8 +9,9 @@ use crate::{
         ApiSettings, ExtractionSettings, FolderSettings, LlmProvider, SavedConnection, Settings,
         Theme,
     },
-    FileDetails, FilePage, FileRecord, FolderRecord, FolderSnapshot, ScanIssue, ScanReport,
-    SearchHit, WatchEvent, WatchFailure, WatchStatus,
+    FileDetails, FilePage, FileRecord, FolderRecord, FolderSnapshot, MaintenanceReport,
+    MaintenanceStatus, ScanIssue, ScanReport, SearchHit, SearchPage, WatchEvent, WatchFailure,
+    WatchStatus,
 };
 
 pub fn typescript() -> String {
@@ -25,6 +26,9 @@ pub fn typescript() -> String {
         ScanIssue::decl(&config),
         ScanReport::decl(&config),
         SearchHit::decl(&config),
+        SearchPage::decl(&config),
+        MaintenanceStatus::decl(&config),
+        MaintenanceReport::decl(&config),
         WatchStatus::decl(&config),
         WatchFailure::decl(&config),
         WatchEvent::decl(&config),

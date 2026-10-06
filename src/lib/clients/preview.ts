@@ -48,6 +48,7 @@ export function createPreviewClient(): AppClient {
   let status = createPreviewStatus(),
     revision = 0;
   const folders = new Map<number, FileDetails[]>();
+  let unusedCache = 12;
   const files = (folderId: number) => {
     if (!folders.has(folderId)) folders.set(folderId, sampleFiles(folderId));
     return folders.get(folderId)!;
@@ -98,12 +99,21 @@ export function createPreviewClient(): AppClient {
         throw new Error("file search exceeds 1024 bytes");
       query = query.trim();
       const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])];
-      if (fuzzy && (terms.length > 8 || terms.some((term) => Array.from(term).length > 64)))
-        throw new Error("fuzzy search supports up to 8 words of 64 characters each");
+      const fallback =
+        fuzzy && (terms.length > 8 || terms.some((term) => Array.from(term).length > 64));
+      const notice = fallback
+        ? "Showing exact matches: fuzzy search supports up to 8 words of 64 characters each"
+        : null;
       const matches = files(folderId)
         .map((entry) => ({
           entry,
-          rank: previewSearchRank(entry.relativePath, entry.text, query, fuzzy),
+          rank: previewSearchRank(
+            entry.relativePath,
+            entry.text,
+            query,
+            fuzzy && !fallback,
+            fallback,
+          ),
         }))
         .filter((match) => match.rank !== null)
         .sort(
@@ -116,7 +126,31 @@ export function createPreviewClient(): AppClient {
                 : 0),
         )
         .map(({ entry }) => entry);
-      return structuredClone({ files: matches.slice(offset, offset + 50), total: matches.length });
+      return structuredClone({
+        files: matches.slice(offset, offset + 50),
+        total: matches.length,
+        notice,
+      });
+    },
+    async maintenanceStatus() {
+      return {
+        indexedFiles: 148,
+        cachedExtractions: 136 + unusedCache,
+        unusedCachedExtractions: unusedCache,
+        cacheBytes: 28000,
+      };
+    },
+    async chooseBackupPath() {
+      return "lenscribe-preview-backup.lenscribe-backup";
+    },
+    async backupDatabase() {},
+    async rebuildIndex() {
+      return { scannedFolders: 2, changedFiles: 0, removedFiles: 0, issues: [] };
+    },
+    async cleanupCache() {
+      const removed = unusedCache;
+      unusedCache = 0;
+      return removed;
     },
     async fileDetails(fileId) {
       return structuredClone(file(fileId));

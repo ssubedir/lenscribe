@@ -103,7 +103,7 @@ pub fn run() {
                 log::logger().flush();
             }));
             let directory = app.path().app_data_dir()?;
-            let core = Arc::new(Core::open(directory.join("index.sqlite"))?);
+            let core = Arc::new(Core::open(directory.join("index.wedb"))?);
             let handle = app.handle().clone();
             let daemon = Daemon::load(
                 core.clone(),
@@ -142,6 +142,10 @@ pub fn run() {
             commands::list_folders,
             commands::folder_snapshot,
             commands::file_details,
+            commands::maintenance_status,
+            commands::backup_database,
+            commands::rebuild_index,
+            commands::cleanup_cache,
             commands::attach_text,
             commands::search_files,
             commands::watch_folder,

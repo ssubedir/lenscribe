@@ -68,6 +68,26 @@ describe("preview client", () => {
     expect((await client.fileDetails(101)).text).toBe("Corrected receipt");
     expect((await client.filePreview(101)).startsWith("data:image/svg+xml")).toBe(true);
   });
+
+  test("oversized fuzzy queries retain exact matches and maintenance stays isolated", async () => {
+    const client = createPreviewClient();
+    const text = "one two three four five six seven eight nine";
+    await client.editFile(await client.fileDetails(101), text);
+    const result = await client.listFiles(1, text, 0, true);
+    expect(result.total).toBe(1);
+    expect(result.notice).toContain("Showing exact matches");
+    const before = await client.maintenanceStatus();
+    expect(await client.cleanupCache()).toBe(before.unusedCachedExtractions);
+    expect((await client.maintenanceStatus()).unusedCachedExtractions).toBe(0);
+    expect((await createPreviewClient().maintenanceStatus()).unusedCachedExtractions).toBe(
+      before.unusedCachedExtractions,
+    );
+    const backupPath = await client.chooseBackupPath();
+    if (!backupPath) throw new Error("Preview must provide a backup path");
+    await client.backupDatabase(backupPath);
+    expect((await client.rebuildIndex()).issues).toEqual([]);
+    expect((await client.fileDetails(101)).text).toBe(text);
+  });
 });
 
 describe("settings validation", () => {

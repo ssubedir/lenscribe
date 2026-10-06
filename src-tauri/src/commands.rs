@@ -54,6 +54,30 @@ pub async fn file_details(file_id: i64, state: State<'_, AppState>) -> Result<Fi
 }
 
 #[tauri::command]
+pub async fn maintenance_status(
+    state: State<'_, AppState>,
+) -> Result<lenscribe_core::MaintenanceStatus, String> {
+    run_core(state.core.clone(), Core::maintenance_status).await
+}
+
+#[tauri::command]
+pub async fn backup_database(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    run_core(state.core.clone(), move |core| core.backup_database(path)).await
+}
+
+#[tauri::command]
+pub async fn rebuild_index(
+    state: State<'_, AppState>,
+) -> Result<lenscribe_core::MaintenanceReport, String> {
+    run_core(state.core.clone(), Core::rebuild_index).await
+}
+
+#[tauri::command]
+pub async fn cleanup_cache(state: State<'_, AppState>) -> Result<usize, String> {
+    run_core(state.core.clone(), Core::cleanup_cache).await
+}
+
+#[tauri::command]
 pub async fn attach_text(
     folder_id: i64,
     relative_path: String,

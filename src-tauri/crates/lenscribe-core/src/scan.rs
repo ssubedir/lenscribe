@@ -88,7 +88,7 @@ impl FolderRules {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct Stamp {
+pub(crate) struct Stamp {
     length: u64,
     modified: SystemTime,
 }
@@ -116,6 +116,9 @@ pub(crate) struct ScanState {
 }
 
 impl Core {
+    pub(crate) fn image_stamp(&self, folder_id: i64, relative: &str) -> Result<Stamp> {
+        Stamp::read(&self.image_path(folder_id, relative)?)
+    }
     pub fn set_folder_rules(&self, path: &Path, settings: &FolderSettings) -> Result<bool> {
         let rules = FolderRules::new(settings)?;
         let _work = self.work.lock().map_err(|_| Error::Poisoned)?;
@@ -137,10 +140,18 @@ impl Core {
     fn ensure_scan_state(&self, states: &mut BTreeMap<i64, ScanState>, id: i64) -> Result<()> {
         if let std::collections::btree_map::Entry::Vacant(entry) = states.entry(id) {
             let snapshot = self.snapshot(id)?;
-            let mut tree = MerkleTree::new();
+            let checkpoint = self
+                .database
+                .lock()
+                .map_err(|_| Error::Poisoned)?
+                .merkle_checkpoint(id, &snapshot.files, &snapshot.folder.root_hash)?;
+            let restored = checkpoint.is_some();
+            let mut tree = checkpoint.unwrap_or_default();
             let mut files = BTreeMap::new();
             for record in snapshot.files {
-                tree.insert(&record.relative_path, &record.record_hash)?;
+                if !restored {
+                    tree.insert(&record.relative_path, &record.record_hash)?;
+                }
                 files.insert(
                     record.relative_path.clone(),
                     CachedFile {
@@ -293,6 +304,9 @@ impl Core {
                 let before = match Stamp::read(entry.path()) {
                     Ok(stamp) => stamp,
                     Err(error) => {
+                        if error.is_transient_read() && state.files.contains_key(&relative) {
+                            present.insert(relative.clone());
+                        }
                         issues.insert(relative, error.to_string());
                         continue;
                     }
@@ -317,6 +331,9 @@ impl Core {
                 }) {
                     Ok(image) => image,
                     Err(error) => {
+                        if error.is_transient_read() && state.files.contains_key(&relative) {
+                            present.insert(relative.clone());
+                        }
                         issues.insert(relative, error.to_string());
                         continue;
                     }
@@ -374,7 +391,9 @@ impl Core {
         }
         let root_hash = state.tree.root_hash();
         let mut database = self.database.lock().map_err(|_| Error::Poisoned)?;
-        if let Err(error) = database.apply_changes(id, &upserts, &removed, &root_hash) {
+        if let Err(error) =
+            database.apply_scan(id, &upserts, &removed, &root_hash, Some(&state.tree))
+        {
             // Restore the old tree, retaining exclusions even when a transaction fails.
             state.tree = MerkleTree::new();
             for cached in state.files.values() {

@@ -6,6 +6,8 @@ import type {
   Settings,
   ExtractionSettings,
   ModelCatalog,
+  MaintenanceStatus,
+  MaintenanceReport,
 } from "$lib/generated/core";
 
 export interface UpdateInfo {
@@ -27,6 +29,11 @@ export interface AppClient {
   editFile(file: FileRecord, text: string): Promise<{ file: FileDetails; message: string }>;
   queueFile(file: FileRecord, force: boolean, available: boolean): Promise<string>;
   discoverModels(settings: ExtractionSettings): Promise<ModelCatalog>;
+  maintenanceStatus(): Promise<MaintenanceStatus>;
+  chooseBackupPath(): Promise<string | null>;
+  backupDatabase(path: string): Promise<void>;
+  rebuildIndex(): Promise<MaintenanceReport>;
+  cleanupCache(): Promise<number>;
   checkUpdate(): Promise<UpdateInfo | null>;
   installUpdate(onProgress: (percent: number | null) => void): Promise<void>;
   dispose?(): Promise<void>;

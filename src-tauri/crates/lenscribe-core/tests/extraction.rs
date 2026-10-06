@@ -191,7 +191,7 @@ async fn concurrency_is_bounded_and_reports_all_active_files() {
     gate.add_permits(2);
     wait_for(&daemon, |status| status.pending_images == 0).await;
     assert_eq!(daemon.status().unwrap().processed_images, 3);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -220,7 +220,7 @@ async fn concurrent_identical_images_share_one_request_and_cached_text() {
             "one shared extraction"
         );
     }
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -232,12 +232,12 @@ async fn concurrent_requests_are_paced_by_the_shared_rate_limit() {
     settings.extraction.requests_per_minute = 300;
     daemon.update_settings(settings).await.unwrap();
     wait_for(&daemon, |status| status.pending_images == 0).await;
-    let times = server.state.times.lock().unwrap();
+    let times = server.state.times.lock().unwrap().clone();
     assert_eq!(times.len(), 3);
     for pair in times.windows(2) {
         assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(160));
     }
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -252,7 +252,7 @@ async fn backoff_attempts_and_errors_survive_reopening_the_database() {
     let before = daemon.status().unwrap().extraction.issues[0].clone();
     assert_eq!(before.attempts, 1);
     assert!(before.retry_at_ms.is_some());
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
     let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
@@ -275,7 +275,7 @@ async fn backoff_attempts_and_errors_survive_reopening_the_database() {
     })
     .await;
     assert_eq!(server.state.count.load(Ordering::SeqCst), 2);
-    restarted.stop().unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -290,7 +290,7 @@ async fn authentication_failure_stays_blocked_after_restart_until_the_key_change
         status.extraction.phase == lenscribe_core::extraction::ExtractionPhase::NeedsConfiguration
     })
     .await;
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
     let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
@@ -312,7 +312,7 @@ async fn authentication_failure_stays_blocked_after_restart_until_the_key_change
     restarted.update_settings(settings).await.unwrap();
     wait_for(&restarted, |status| status.pending_images == 0).await;
     assert_eq!(server.state.count.load(Ordering::SeqCst), 2);
-    restarted.stop().unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -323,7 +323,7 @@ async fn request_pacing_survives_restart_and_manual_retry() {
     settings.extraction.requests_per_minute = 1;
     daemon.update_settings(settings.clone()).await.unwrap();
     wait_for(&daemon, |status| status.processed_images == 1).await;
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
     let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
@@ -341,7 +341,7 @@ async fn request_pacing_survives_restart_and_manual_retry() {
     restarted.update_settings(settings).await.unwrap();
     wait_for(&restarted, |status| status.pending_images == 0).await;
     assert_eq!(server.state.count.load(Ordering::SeqCst), 3);
-    restarted.stop().unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -408,7 +408,7 @@ async fn duplicates_reuse_matching_settings_but_reprocess_and_new_prompts_send_f
             .text,
         "new prompt result"
     );
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -442,7 +442,7 @@ async fn failed_reprocessing_preserves_text_and_the_forced_job_survives_a_restar
             .text,
         "original receipt"
     );
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     drop(daemon);
     let restarted = Daemon::load(
         core.clone(),
@@ -461,7 +461,7 @@ async fn failed_reprocessing_preserves_text_and_the_forced_job_survives_a_restar
         core.file(file.id).unwrap().text.as_deref(),
         Some("recovered receipt")
     );
-    restarted.stop().unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -504,7 +504,7 @@ async fn retrying_one_file_does_not_reset_other_permanent_failures() {
         daemon.status().unwrap().extraction.issues[0].relative_path,
         "second.jpg"
     );
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -558,7 +558,7 @@ async fn manual_edits_and_new_exclusions_reject_in_flight_reprocessing_results()
             .text,
         "manual correction"
     );
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 fn image() -> PreparedImage {
@@ -619,6 +619,71 @@ async fn wait_for(
 }
 
 #[tokio::test]
+async fn slow_writes_settle_before_extraction_and_preserve_the_completed_image() {
+    let server = MockServer::start(vec![Reply::text("complete receipt")]).await;
+    let (temporary, core, daemon, settings) = setup(server.settings());
+    daemon.update_settings(settings).await.unwrap();
+    let path = temporary.path().join("images/first.jpg");
+    let mut original = include_bytes!("fixtures/pixel.jpg").to_vec();
+    for chunk in 0..8 {
+        original.extend_from_slice(format!("chunk {chunk}").as_bytes());
+        fs::write(&path, &original).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(server.state.count.load(Ordering::SeqCst), 0);
+    }
+    let settled = Instant::now();
+    server.wait_for_requests(1).await;
+    assert!(
+        server.state.times.lock().unwrap()[0].duration_since(settled) >= Duration::from_millis(750)
+    );
+    wait_for(&daemon, |status| status.pending_images == 0).await;
+    let inspected = trailer::inspect(&path).unwrap();
+    assert_eq!(inspected.image_hash, trailer::hash_bytes(&original));
+    assert_eq!(&fs::read(&path).unwrap()[..original.len()], &original);
+    assert_eq!(core.search("complete", None, 10).unwrap().len(), 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_lock_during_commit_defers_the_image_without_blocking_healthy_work() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let gate = Arc::new(Semaphore::new(0));
+    let mut first = Reply::text("first response");
+    first.gate = Some(gate.clone());
+    let server = MockServer::start(vec![
+        first,
+        Reply::text("healthy image"),
+        Reply::text("retried image"),
+    ])
+    .await;
+    let (temporary, core, daemon, settings) = setup(server.settings());
+    daemon.update_settings(settings).await.unwrap();
+    server.wait_for_requests(1).await;
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(temporary.path().join("images/first.jpg"))
+        .unwrap();
+    gate.add_permits(1);
+    let mut healthy = include_bytes!("fixtures/pixel.jpg").to_vec();
+    healthy.extend_from_slice(b"healthy original");
+    fs::write(temporary.path().join("images/healthy.jpg"), healthy).unwrap();
+    server.wait_for_requests(2).await;
+    wait_for(&daemon, |status| {
+        status.processed_images == 1 && status.pending_images == 1
+    })
+    .await;
+    assert_eq!(daemon.status().unwrap().extraction.failed_images, 0);
+    assert_eq!(core.search("healthy", None, 10).unwrap().len(), 1);
+    drop(locked);
+    wait_for(&daemon, |status| status.pending_images == 0).await;
+    assert_eq!(server.state.count.load(Ordering::SeqCst), 2);
+    assert_eq!(daemon.status().unwrap().extraction.failed_images, 0);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn vision_request_targets_custom_endpoint_with_original_bytes_and_preserves_text() {
     let server = MockServer::start(vec![Reply::text("  Café\nTotal: 12.00\n")]).await;
     let client = VisionClient::new(server.settings()).unwrap();
@@ -626,7 +691,7 @@ async fn vision_request_targets_custom_endpoint_with_original_bytes_and_preserve
         client.extract(&image()).await.unwrap(),
         "  Café\nTotal: 12.00\n"
     );
-    let requests = server.state.requests.lock().unwrap();
+    let requests = server.state.requests.lock().unwrap().clone();
     let (headers, body) = &requests[0];
     assert!(!headers.contains_key("authorization"));
     assert_eq!(body["model"], "custom/vision-model");
@@ -897,7 +962,7 @@ async fn webp_arrivals_are_watched_extracted_and_sent_without_the_text_trailer()
                 assert!(!body.to_string().contains("Previous private text"));
             }
         }
-        daemon.stop().unwrap();
+        daemon.shutdown().await.unwrap();
     }
 }
 
@@ -927,7 +992,7 @@ async fn native_provider_workers_append_only_transcription_to_images() {
             .unwrap();
         assert_eq!(saved.text, "Café receipt 12.00");
         assert!(!saved.processor.contains("fixture-secret"));
-        daemon.stop().unwrap();
+        daemon.shutdown().await.unwrap();
     }
 }
 
@@ -1175,7 +1240,7 @@ async fn worker_appends_text_updates_search_and_processes_new_files_without_a_ui
     })
     .await;
     assert_eq!(core.search("receipt", None, 10).unwrap().len(), 2);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     drop(daemon);
     let restarted = Daemon::load(
         core.clone(),
@@ -1187,7 +1252,7 @@ async fn worker_appends_text_updates_search_and_processes_new_files_without_a_ui
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(server.state.count.load(Ordering::SeqCst), 1); // The identical second image reuses the first result.
     assert_eq!(restarted.status().unwrap().pending_images, 0);
-    restarted.stop().unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1215,7 +1280,7 @@ async fn pausing_cancels_in_flight_extraction_and_resuming_catches_up() {
     daemon.update_settings(settings).await.unwrap();
     wait_for(&daemon, |status| status.pending_images == 0).await;
     assert_eq!(core.search("fresh response", None, 10).unwrap().len(), 1);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1238,7 +1303,7 @@ async fn changing_provider_configuration_cancels_old_responses_before_commit() {
         .remove(0);
     assert_eq!(core.file(file.id).unwrap().text.unwrap(), "new model text");
     assert!(file.processor.unwrap().contains("new/vision-model"));
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1260,7 +1325,7 @@ async fn failed_responses_stay_pending_and_manual_retry_processes_them() {
         status.pending_images == 0 && status.extraction.failed_images == 0
     })
     .await;
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1289,7 +1354,7 @@ async fn endpoint_authentication_errors_stop_the_queue_until_explicit_retry() {
         .contains("private secret"));
     daemon.retry().await.unwrap();
     wait_for(&daemon, |status| status.pending_images == 0).await;
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1309,7 +1374,7 @@ async fn rate_limited_worker_honors_backoff_then_retries_successfully() {
     })
     .await;
     assert_eq!(server.state.count.load(Ordering::SeqCst), 2);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1324,7 +1389,7 @@ async fn invalid_key_is_rejected_without_sending_any_images() {
         lenscribe_core::extraction::ExtractionPhase::Disabled
     );
     assert_eq!(server.state.count.load(Ordering::SeqCst), 0);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[test]
@@ -1363,10 +1428,10 @@ async fn editing_the_api_key_restarts_extraction_without_restarting_the_app() {
     gate.add_permits(1);
     wait_for(&daemon, |status| status.pending_images == 0).await;
     assert_eq!(core.search("new key response", None, 10).unwrap().len(), 1);
-    let requests = server.state.requests.lock().unwrap();
+    let requests = server.state.requests.lock().unwrap().clone();
     assert_eq!(requests[0].0["authorization"], "Bearer old-fixture-key");
     assert_eq!(requests[1].0["authorization"], "Bearer new-fixture-key");
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1389,5 +1454,5 @@ async fn removed_or_changed_images_cannot_receive_an_old_in_flight_response() {
     let inspected = trailer::inspect(&first).unwrap();
     assert_eq!(inspected.image_hash, trailer::hash_bytes(&changed));
     assert_ne!(inspected.trailer.unwrap().text, "stale text");
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }

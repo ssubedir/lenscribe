@@ -148,6 +148,7 @@
   <p class="hint">
     Replace “coffee” with the words you want to find. In Windows PowerShell, use curl.exe.
   </p>
+  <p class="hint">Search includes word prefixes and common typos, just like the file inspector.</p>
   <pre><code>{curlCommand}</code></pre>
   {#if !status.apiUrl}<p class="hint">
       Enable the API and save settings to use these commands.
@@ -165,6 +166,9 @@
   <pre><code>{textCommand}</code></pre>
   <div class="endpoint-list">
     <div><code>GET /search?q=…</code><span>Find matching images</span></div>
+    <div>
+      <code>GET /search/page?q=…</code><span>Paginated matches, snippets, and total count</span>
+    </div>
     <div><code>GET /files/:id/text</code><span>Read extracted text</span></div>
     <div><code>GET /folders</code><span>List indexed folders</span></div>
     <div><code>GET /health</code><span>Check the API</span></div>

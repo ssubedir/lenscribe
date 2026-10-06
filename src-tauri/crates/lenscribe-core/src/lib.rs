@@ -8,7 +8,9 @@ mod error;
 pub mod extraction;
 pub mod http;
 pub mod llm;
+mod maintenance;
 pub mod merkle;
+#[cfg(all(test, feature = "legacy-sqlite"))]
 mod migrations;
 pub mod model;
 mod scan;
@@ -112,6 +114,24 @@ impl Core {
             .map_err(|_| Error::Poisoned)?
             .search()
             .query(query, folder_id, limit)
+    }
+
+    pub fn search_page(
+        &self,
+        query: &str,
+        folder_id: Option<i64>,
+        offset: usize,
+        limit: usize,
+        fuzzy: bool,
+    ) -> Result<SearchPage> {
+        if let Some(id) = folder_id {
+            self.folder(id)?;
+        }
+        self.database
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .search()
+            .page(query, folder_id, offset, limit, fuzzy)
     }
 
     pub fn prepare_image(&self, folder_id: i64, relative_path: &str) -> Result<PreparedImage> {
@@ -254,6 +274,9 @@ impl Core {
             {
                 return Err(Error::ImageChanged);
             }
+            // Persist the response before touching the image, so locks and restarts
+            // can retry the trailer commit without another model request.
+            database.jobs().save_result(job, text, processor)?;
         }
         self.attach_locked(
             job.file.folder_id,
@@ -336,6 +359,19 @@ impl Core {
         let watches = std::mem::take(&mut *self.watches.lock().map_err(|_| Error::Poisoned)?);
         drop(watches);
         Ok(())
+    }
+
+    pub fn persist(&self) -> Result<()> {
+        self.database.lock().map_err(|_| Error::Poisoned)?.persist()
+    }
+
+    /// Restore a verified logical backup into a new directory before starting the daemon.
+    pub fn restore_database(
+        backup: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+    ) -> Result<Self> {
+        database::restore(backup.as_ref(), destination.as_ref())?;
+        Self::open(destination)
     }
 
     fn image_path(&self, folder_id: i64, relative_path: &str) -> Result<PathBuf> {

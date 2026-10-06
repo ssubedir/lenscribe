@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let database = arguments
             .get(2)
             .map(PathBuf::from)
-            .unwrap_or_else(|| settings_path.with_file_name("index.sqlite"));
+            .unwrap_or_else(|| settings_path.with_file_name("index.wedb"));
         let core = Arc::new(Core::open(database)?);
         let daemon = Daemon::load(
             core,
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!("{}", serde_json::to_string_pretty(&status)?);
         tokio::signal::ctrl_c().await?;
-        daemon.stop()?;
+        daemon.shutdown().await?;
         return Ok(());
     }
     if arguments.is_empty() || arguments.len() > 3 {
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = arguments
         .get(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".lenscribe/index.sqlite"));
+        .unwrap_or_else(|| PathBuf::from(".lenscribe/index.wedb"));
     let port = arguments
         .get(2)
         .map(|port| port.parse::<u16>())
@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Read-only API: {}", server.url());
     tokio::signal::ctrl_c().await?;
     core.unwatch_folder(report.folder.id)?;
-    drop(server);
+    server.stop().await;
+    core.persist()?;
     Ok(())
 }

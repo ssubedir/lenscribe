@@ -15,7 +15,9 @@ use axum::{
 use serde::Deserialize;
 use tokio::{net::TcpListener, sync::oneshot};
 
-use crate::{Core, Error, FileDetails, FolderRecord, FolderSnapshot, Result, SearchHit};
+use crate::{
+    Core, Error, FileDetails, FolderRecord, FolderSnapshot, Result, SearchHit, SearchPage,
+};
 
 pub fn router(core: Arc<Core>) -> Router {
     Router::new()
@@ -30,12 +32,14 @@ pub fn router(core: Arc<Core>) -> Router {
         .route("/files/{id}", get(file))
         .route("/files/{id}/text", get(file_text))
         .route("/search", get(search))
+        .route("/search/page", get(search_page))
         .with_state(core)
 }
 
 pub struct ApiServer {
     address: SocketAddr,
     shutdown: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ApiServer {
@@ -45,7 +49,7 @@ impl ApiServer {
         let address = listener.local_addr()?;
         log::info!("Local API started at http://{}", address);
         let (shutdown, received) = oneshot::channel();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, router(core))
                 .with_graceful_shutdown(async {
                     let _ = received.await;
@@ -58,11 +62,21 @@ impl ApiServer {
         Ok(Self {
             address,
             shutdown: Some(shutdown),
+            task: Some(task),
         })
     }
 
     pub fn url(&self) -> String {
         format!("http://{}", self.address)
+    }
+
+    pub async fn stop(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
     }
 }
 
@@ -149,6 +163,8 @@ struct SearchQuery {
     q: String,
     folder_id: Option<i64>,
     limit: Option<usize>,
+    offset: Option<usize>,
+    fuzzy: Option<bool>,
 }
 
 async fn search(
@@ -157,7 +173,33 @@ async fn search(
 ) -> std::result::Result<Json<Vec<SearchHit>>, ApiError> {
     Ok(Json(
         query_core(core, move |core| {
-            core.search(&query.q, query.folder_id, query.limit.unwrap_or(20))
+            Ok(core
+                .search_page(
+                    &query.q,
+                    query.folder_id,
+                    query.offset.unwrap_or(0),
+                    query.limit.unwrap_or(20),
+                    query.fuzzy.unwrap_or(true),
+                )?
+                .hits)
+        })
+        .await?,
+    ))
+}
+
+async fn search_page(
+    State(core): State<Arc<Core>>,
+    Query(query): Query<SearchQuery>,
+) -> std::result::Result<Json<SearchPage>, ApiError> {
+    Ok(Json(
+        query_core(core, move |core| {
+            core.search_page(
+                &query.q,
+                query.folder_id,
+                query.offset.unwrap_or(0),
+                query.limit.unwrap_or(20),
+                query.fuzzy.unwrap_or(true),
+            )
         })
         .await?,
     ))

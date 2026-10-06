@@ -471,13 +471,25 @@ impl Daemon {
             supervisor.abort();
         }
         self.state.lock().map_err(|_| Error::Poisoned)?.api = None;
-        self.core.stop_watches()
+        self.core.stop_watches()?;
+        self.core.persist()
     }
 
     /// Wait for configuration changes and atomic extraction commits before installation.
     pub async fn shutdown(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
-        self.stop()
+        let api = self.state.lock().map_err(|_| Error::Poisoned)?.api.take();
+        let supervisor = self.supervisor.lock().map_err(|_| Error::Poisoned)?.take();
+        self.stop()?;
+        if let Some(supervisor) = supervisor {
+            supervisor.abort();
+            let _ = supervisor.await;
+        }
+        self.extraction.wait_stopped().await?;
+        if let Some(api) = api {
+            api.stop().await;
+        }
+        self.core.persist()
     }
 }
 

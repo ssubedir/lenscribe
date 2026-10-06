@@ -124,7 +124,7 @@ async fn progress_counts_empty_transcriptions_and_tracks_folder_health() {
     assert_eq!(disabled.total_images, 0);
     assert_eq!(disabled.folder_statuses[0].image_count, 1);
     assert!(!disabled.folder_statuses[0].enabled);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[test]
@@ -188,7 +188,7 @@ async fn saved_configuration_restores_watches_api_and_backlog_without_a_ui() {
     assert_eq!(status.watchers.len(), 1);
     assert_eq!(status.pending_images, 1);
     assert!(status.api_url.unwrap().starts_with("http://127.0.0.1:"));
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     assert!(core.watch_status().unwrap().is_empty());
     drop(daemon);
     drop(core);
@@ -258,7 +258,7 @@ async fn pausing_keeps_backlog_and_resuming_discovers_images_saved_during_pause(
     let status = daemon.update_settings(settings).await.unwrap();
     assert!(status.watchers.is_empty());
     assert_eq!(status.pending_images, 0);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -294,7 +294,7 @@ async fn unavailable_folders_do_not_stop_healthy_watches_and_can_recover() {
         .iter()
         .all(|folder| folder.last_error.is_none()));
     assert_eq!(recovered.pending_images, 2);
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -314,7 +314,7 @@ async fn occupied_api_ports_are_reported_and_retried_without_stopping_monitoring
     let recovered = daemon.reconcile().await.unwrap();
     assert!(recovered.api_url.is_some());
     assert!(recovered.issues.is_empty());
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -331,6 +331,6 @@ async fn invalid_settings_do_not_change_live_watches_or_saved_settings() {
         Settings::load(&temporary.path().join("settings.json")).unwrap(),
         settings
     );
-    daemon.stop().unwrap();
+    daemon.shutdown().await.unwrap();
     assert!(daemon.reconcile().await.is_err());
 }

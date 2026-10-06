@@ -67,6 +67,7 @@ struct RunningWorker {
     config: Option<WorkerConfig>,
     task: Option<JoinHandle<()>>,
     cancelled: Arc<AtomicBool>,
+    retired: Vec<JoinHandle<()>>,
 }
 
 pub(crate) struct ExtractionController {
@@ -107,10 +108,17 @@ impl ExtractionController {
             return Ok(());
         }
         running.cancelled.store(true, Ordering::Relaxed);
+        running.retired.retain(|task| !task.is_finished());
         if let Some(task) = running.task.take() {
             task.abort();
+            running.retired.push(task);
         }
         running.cancelled = Arc::new(AtomicBool::new(false));
+        core.database
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .jobs()
+            .recover_leases()?;
         if force_retry {
             if let Ok(client) = VisionClient::new(config.settings.clone()) {
                 let recovery = recovery_id(&client, &config.settings);
@@ -158,6 +166,15 @@ impl ExtractionController {
         running.cancelled.store(true, Ordering::Relaxed);
         if let Some(task) = running.task.take() {
             task.abort();
+            running.retired.push(task);
+        }
+        Ok(())
+    }
+
+    pub async fn wait_stopped(&self) -> Result<()> {
+        let tasks = std::mem::take(&mut self.running.lock().map_err(|_| Error::Poisoned)?.retired);
+        for task in tasks {
+            let _ = task.await;
         }
         Ok(())
     }
@@ -235,31 +252,20 @@ async fn worker(
         }
     };
     let recovery = recovery_id(&client, &config.settings);
-    let (stored, endpoint) = core
+    let wake = core
+        .database
+        .lock()
+        .map_err(|_| Error::Poisoned)?
+        .wake
+        .clone();
+    let owner = format!("{}-{}", std::process::id(), now_ms());
+    let (_, endpoint) = core
         .database
         .lock()
         .map_err(|_| Error::Poisoned)?
         .recovery()
         .load(&recovery)?;
-    let mut failures: BTreeMap<JobKey, Failure> = stored
-        .into_iter()
-        .filter(|failure| config.folder_ids.contains(&failure.file.folder_id))
-        .map(|failure| {
-            (
-                (
-                    failure.file.id,
-                    failure.file.image_hash.clone(),
-                    failure.request_id,
-                ),
-                Failure {
-                    file: failure.file,
-                    error: failure.error,
-                    attempts: failure.attempts,
-                    retry_at_ms: failure.retry_at_ms,
-                },
-            )
-        })
-        .collect();
+    let mut failures: BTreeMap<JobKey, Failure>;
     let endpoint = Arc::new(tokio::sync::Mutex::new(endpoint));
     let mut tasks = JoinSet::new();
     let mut active = BTreeSet::new();
@@ -270,16 +276,55 @@ async fn worker(
         }
         let snapshot_core = core.clone();
         let folder_ids = config.folder_ids.clone();
-        let pending = tokio::task::spawn_blocking(move || {
-            let mut pending = vec![];
-            for id in folder_ids {
-                pending.extend(snapshot_core.extraction_jobs(id)?);
+        let active_ids = active.iter().map(|key: &JobKey| key.0).collect::<Vec<_>>();
+        let capacity = config.settings.concurrency.saturating_sub(tasks.len());
+        let queue_recovery = recovery.clone();
+        let claim_owner = owner.clone();
+        let (pending, stored, next_due) = tokio::task::spawn_blocking(move || {
+            let database = snapshot_core.database.lock().map_err(|_| Error::Poisoned)?;
+            let pending = database.jobs().ready(
+                &folder_ids,
+                &queue_recovery,
+                now_ms(),
+                &active_ids,
+                capacity,
+            )?;
+            let mut claimed = Vec::new();
+            for job in pending {
+                if database
+                    .jobs()
+                    .claim(&job, &claim_owner, now_ms(), now_ms() + 3_600_000)?
+                {
+                    claimed.push(job);
+                }
             }
-            Ok::<_, Error>(pending)
+            let (failures, _) = database.recovery().load(&queue_recovery)?;
+            let next_due = database
+                .jobs()
+                .next_due(&folder_ids, &queue_recovery, &active_ids)?;
+            Ok::<_, Error>((claimed, failures, next_due))
         })
         .await
         .map_err(|e| Error::InvalidInput(e.to_string()))??;
-        failures.retain(|key, _| pending.iter().any(|job| job_key(job) == *key));
+        failures = stored
+            .into_iter()
+            .filter(|failure| config.folder_ids.contains(&failure.file.folder_id))
+            .map(|failure| {
+                (
+                    (
+                        failure.file.id,
+                        failure.file.image_hash.clone(),
+                        failure.request_id,
+                    ),
+                    Failure {
+                        file: failure.file,
+                        error: failure.error,
+                        attempts: failure.attempts,
+                        retry_at_ms: failure.retry_at_ms,
+                    },
+                )
+            })
+            .collect();
         publish_failures(&status, &failures);
         let endpoint_state = endpoint.lock().await.clone();
         if let Some(error) = endpoint_state.blocked_error {
@@ -291,8 +336,7 @@ async fn worker(
             }
             return Ok(());
         }
-        let can_start = endpoint_state.retry_at_ms.is_none_or(|at| at <= now_ms());
-        if can_start {
+        {
             for job in pending {
                 if tasks.len() >= config.settings.concurrency {
                     break;
@@ -340,13 +384,26 @@ async fn worker(
                 ExtractionPhase::Extracting
             };
         }
+        let wait_ms = if tasks.len() >= config.settings.concurrency {
+            30_000
+        } else {
+            next_due.map_or(30_000, |due| {
+                due.max(endpoint_state.retry_at_ms.unwrap_or(0))
+                    .saturating_sub(now_ms())
+                    .clamp(100, 30_000)
+            })
+        };
         if tasks.is_empty() {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::select! {
+                _ = wake.notified() => (),
+                _ = tokio::time::sleep(Duration::from_millis(wait_ms)) => (),
+            }
             continue;
         }
         let completed = tokio::select! {
             result = tasks.join_next() => result,
-            _ = tokio::time::sleep(Duration::from_millis(500)) => continue,
+            _ = wake.notified() => continue,
+            _ = tokio::time::sleep(Duration::from_millis(wait_ms)) => continue,
         };
         let Some(completed) = completed else {
             continue;
@@ -354,7 +411,17 @@ async fn worker(
         let (job, result) = completed.map_err(|e| Error::InvalidInput(e.to_string()))?;
         let key = job_key(&job);
         active.remove(&key);
+        core.database
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .jobs()
+            .release(&job)?;
         let Some(result) = result else {
+            core.database
+                .lock()
+                .map_err(|_| Error::Poisoned)?
+                .jobs()
+                .defer(&job, now_ms() + 2000)?;
             continue;
         };
         match result {
@@ -482,14 +549,26 @@ async fn process_job(
     context: &JobContext,
     job: &crate::ExtractionJob,
 ) -> Option<std::result::Result<(), ExtractionError>> {
+    if !wait_for_image(context, job).await {
+        return None;
+    }
     let prepare_core = context.core.clone();
     let file = job.file.clone();
     let processor = context.client.processor().to_owned();
     let cache_processor = processor.clone();
     let force = job.force;
+    let saved_job = job.clone();
     let prepared = tokio::task::spawn_blocking(move || {
         let image = prepare_core.prepare_image(file.folder_id, &file.relative_path)?;
-        let cached = if force {
+        let saved = prepare_core
+            .database
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .jobs()
+            .saved_text(&saved_job, &cache_processor)?;
+        let cached = if saved.is_some() {
+            saved
+        } else if force {
             None
         } else {
             prepare_core.cached_extraction(&image.image_hash, &cache_processor)?
@@ -500,6 +579,7 @@ async fn process_job(
     let (image, cached) = match prepared {
         Ok(Ok(prepared)) if prepared.0.image_hash == job.file.image_hash => prepared,
         Ok(Ok(_)) => return None,
+        Ok(Err(error)) if error.is_transient_read() => return None,
         _ => return Some(Err(ExtractionError::permanent(
             "Cannot read this image for extraction; it may have moved, changed, or been excluded",
         ))),
@@ -535,9 +615,47 @@ async fn process_job(
     {
         Ok(Ok(_)) => Some(Ok(())),
         Ok(Err(Error::ImageChanged | Error::NotFound(_))) => None,
+        Ok(Err(error)) if error.is_transient_read() => None,
         _ => Some(Err(ExtractionError::permanent(
             "Cannot save extracted text to the image",
         ))),
+    }
+}
+
+/// A quiet watcher event is only a hint: slow copies can pause between writes.
+/// Observe stable metadata for one second without blocking a runtime thread.
+async fn wait_for_image(context: &JobContext, job: &crate::ExtractionJob) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut previous = None;
+    let mut stable_since = tokio::time::Instant::now();
+    loop {
+        if context.cancelled.load(Ordering::Relaxed) {
+            return false;
+        }
+        let core = context.core.clone();
+        let file = job.file.clone();
+        let stamp = tokio::task::spawn_blocking(move || {
+            core.image_stamp(file.folder_id, &file.relative_path)
+        })
+        .await;
+        match stamp {
+            Ok(Ok(stamp)) => {
+                if previous.as_ref() != Some(&stamp) {
+                    previous = Some(stamp);
+                    stable_since = tokio::time::Instant::now();
+                } else if stable_since.elapsed() >= Duration::from_secs(1) {
+                    return true;
+                }
+            }
+            _ => {
+                previous = None;
+                stable_since = tokio::time::Instant::now();
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 

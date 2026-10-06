@@ -1,20 +1,22 @@
-use rusqlite::{params, Connection, OptionalExtension};
-
+use super::{store::Change, Database};
 use crate::{ExtractionJob, FileRecord, Result};
-
-use super::{
-    files::FileRepository,
-    jobs::ExtractionJobRepository,
-    rows::{file_row, FILE_COLUMNS},
-};
-
-#[derive(Clone, Default)]
+use serde::{Deserialize, Serialize};
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct EndpointState {
     pub retry_at_ms: Option<u64>,
     pub next_request_ms: u64,
     pub blocked_error: Option<String>,
 }
-
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct FailureState {
+    pub file_id: i64,
+    pub recovery_id: String,
+    pub image_hash: String,
+    pub request_id: Option<i64>,
+    pub error: String,
+    pub attempts: u32,
+    pub retry_at_ms: Option<u64>,
+}
 pub(crate) struct StoredFailure {
     pub file: FileRecord,
     pub request_id: Option<i64>,
@@ -22,140 +24,120 @@ pub(crate) struct StoredFailure {
     pub attempts: u32,
     pub retry_at_ms: Option<u64>,
 }
-
-pub(crate) struct RecoveryRepository<'a> {
-    connection: &'a Connection,
+pub(super) fn failure_key(recovery: &str, file: i64) -> String {
+    format!("failures/{file:020}/{recovery}")
 }
-
+pub(crate) struct RecoveryRepository<'a> {
+    database: &'a Database,
+}
 impl<'a> RecoveryRepository<'a> {
-    pub(super) fn new(connection: &'a Connection) -> Self {
-        Self { connection }
+    pub(super) fn new(database: &'a Database) -> Self {
+        Self { database }
     }
-
-    pub fn load(&self, recovery_id: &str) -> Result<(Vec<StoredFailure>, EndpointState)> {
-        let mut query = self.connection.prepare(&format!(
-            "SELECT {FILE_COLUMNS}, r.request_id, r.error, r.attempts, r.retry_at_ms
-             FROM extraction_failures r JOIN files f ON f.id = r.file_id
-             LEFT JOIN extraction_jobs j ON j.file_id = f.id
-             WHERE r.recovery_id = ?1 AND r.image_hash = f.image_hash
-                AND r.request_id IS j.id AND (f.processor IS NULL OR j.id IS NOT NULL)",
-        ))?;
-        let failures = query
-            .query_map([recovery_id], |row| {
-                Ok(StoredFailure {
-                    file: file_row(row)?,
-                    request_id: row.get(8)?,
-                    error: row.get(9)?,
-                    attempts: row.get(10)?,
-                    retry_at_ms: row.get::<_, Option<i64>>(11)?.map(|at| at.max(0) as u64),
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        let endpoint = self
-            .connection
-            .query_row(
-                "SELECT retry_at_ms, next_request_ms, blocked_error
-                 FROM extraction_endpoints WHERE recovery_id = ?1",
-                [recovery_id],
-                |row| {
-                    Ok(EndpointState {
-                        retry_at_ms: row.get::<_, Option<i64>>(0)?.map(|at| at.max(0) as u64),
-                        next_request_ms: row.get::<_, i64>(1)?.max(0) as u64,
-                        blocked_error: row.get(2)?,
-                    })
-                },
-            )
-            .optional()?
-            .unwrap_or_default();
-        Ok((failures, endpoint))
+    pub fn load(&self, recovery: &str) -> Result<(Vec<StoredFailure>, EndpointState)> {
+        let state = self.database.state.borrow();
+        let mut failures = Vec::new();
+        for failure in state.failures.values() {
+            if failure.recovery_id != recovery {
+                continue;
+            }
+            let Some(file) = state.files.get(&failure.file_id) else {
+                continue;
+            };
+            let job = state.jobs.get(&file.id);
+            if failure.image_hash != file.image_hash
+                || failure.request_id != job.and_then(|job| job.id)
+                || (file.processor.is_some() && job.is_none())
+            {
+                continue;
+            }
+            failures.push(StoredFailure {
+                file: file.clone(),
+                request_id: failure.request_id,
+                error: failure.error.clone(),
+                attempts: failure.attempts,
+                retry_at_ms: failure.retry_at_ms,
+            });
+        }
+        Ok((
+            failures,
+            self.database
+                .store
+                .get(&format!("endpoints/{recovery}"))?
+                .unwrap_or_default(),
+        ))
     }
-
-    pub fn save_endpoint(&self, recovery_id: &str, state: &EndpointState) -> Result<()> {
-        self.connection.execute(
-            "INSERT INTO extraction_endpoints(recovery_id, retry_at_ms, next_request_ms, blocked_error)
-             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(recovery_id) DO UPDATE SET
-                retry_at_ms = excluded.retry_at_ms, next_request_ms = excluded.next_request_ms,
-                blocked_error = excluded.blocked_error",
-            params![
-                recovery_id,
-                state.retry_at_ms.map(sqlite_timestamp),
-                sqlite_timestamp(state.next_request_ms),
-                state.blocked_error
-            ],
-        )?;
-        Ok(())
+    pub fn save_endpoint(&self, recovery: &str, state: &EndpointState) -> Result<()> {
+        self.database
+            .commit(vec![Change::put(format!("endpoints/{recovery}"), state)?])
     }
-
     pub fn save_failure(
         &self,
-        recovery_id: &str,
+        recovery: &str,
         job: &ExtractionJob,
         error: &str,
         attempts: u32,
-        retry_at_ms: Option<u64>,
+        retry: Option<u64>,
         endpoint: &EndpointState,
     ) -> Result<bool> {
-        let Some(current) = FileRepository::new(self.connection).find_record(job.file.id)? else {
-            return Ok(false);
-        };
-        if current.record_hash != job.file.record_hash
-            || ExtractionJobRepository::new(self.connection).request_id(job.file.id)?
-                != job.request_id
+        if self
+            .database
+            .state
+            .borrow()
+            .files
+            .get(&job.file.id)
+            .is_none_or(|file| file.record_hash != job.file.record_hash)
+            || self.database.jobs().request_id(job.file.id)? != job.request_id
         {
             return Ok(false);
         }
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "INSERT INTO extraction_failures(file_id, recovery_id, image_hash, request_id,
-                error, attempts, retry_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(file_id, recovery_id) DO UPDATE SET
-                image_hash = excluded.image_hash, request_id = excluded.request_id,
-                error = excluded.error, attempts = excluded.attempts, retry_at_ms = excluded.retry_at_ms",
-            params![
-                job.file.id,
-                recovery_id,
-                job.file.image_hash,
-                job.request_id,
-                error,
-                attempts,
-                retry_at_ms.map(sqlite_timestamp)
-            ],
-        )?;
-        RecoveryRepository::new(&transaction).save_endpoint(recovery_id, endpoint)?;
-        transaction.commit()?;
+        let failure = FailureState {
+            file_id: job.file.id,
+            recovery_id: recovery.into(),
+            image_hash: job.file.image_hash.clone(),
+            request_id: job.request_id,
+            error: error.into(),
+            attempts,
+            retry_at_ms: retry,
+        };
+        self.database.commit(vec![
+            Change::put(failure_key(recovery, job.file.id), &failure)?,
+            Change::put(format!("endpoints/{recovery}"), endpoint)?,
+        ])?;
         Ok(true)
     }
-
-    pub fn clear(&self, recovery_id: &str) -> Result<()> {
-        self.connection.execute(
-            "DELETE FROM extraction_failures WHERE recovery_id = ?1",
-            [recovery_id],
-        )?;
-        // Keep request pacing on explicit retry, while clearing endpoint failures/backoff.
-        self.connection.execute(
-            "UPDATE extraction_endpoints SET retry_at_ms = NULL, blocked_error = NULL
-             WHERE recovery_id = ?1",
-            [recovery_id],
-        )?;
-        Ok(())
+    pub fn clear(&self, recovery: &str) -> Result<()> {
+        let mut changes = self
+            .database
+            .store
+            .scan::<FailureState>("failures/")?
+            .into_iter()
+            .filter(|(_, f)| f.recovery_id == recovery)
+            .map(|(key, _)| Change::remove(key))
+            .collect::<Vec<_>>();
+        let mut endpoint = self
+            .database
+            .store
+            .get::<EndpointState>(&format!("endpoints/{recovery}"))?
+            .unwrap_or_default();
+        endpoint.retry_at_ms = None;
+        endpoint.blocked_error = None;
+        changes.push(Change::put(format!("endpoints/{recovery}"), &endpoint)?);
+        self.database.commit(changes)
     }
-
-    pub(super) fn discard_stale(&self, folder_id: i64, file: &FileRecord) -> Result<()> {
-        self.connection.execute(
-            "DELETE FROM extraction_failures
-             WHERE file_id = (SELECT id FROM files WHERE folder_id = ?1 AND relative_path = ?2)
-                AND (image_hash != ?3 OR ?4 IS NOT NULL)",
-            params![
-                folder_id,
-                file.relative_path,
-                file.image_hash,
-                file.processor
-            ],
-        )?;
-        Ok(())
+    pub(super) fn discard_changes(
+        &self,
+        file: i64,
+        image: &str,
+        processed: bool,
+    ) -> Result<Vec<Change>> {
+        Ok(self
+            .database
+            .store
+            .scan::<FailureState>(&format!("failures/{file:020}/"))?
+            .into_iter()
+            .filter(|(_, failure)| processed || failure.image_hash != image)
+            .map(|(key, _)| Change::remove(key))
+            .collect())
     }
-}
-
-fn sqlite_timestamp(at: u64) -> i64 {
-    at.min(i64::MAX as u64) as i64
 }

@@ -5,6 +5,8 @@ edition = "2021"
 description = "Image text trailers, Merkle tracking, and local search for Lenscribe"
 
 [features]
+default = ["legacy-sqlite"]
+legacy-sqlite = ["dep:rusqlite"]
 bindings = ["dep:ts-rs"]
 
 [[bin]]
@@ -20,9 +22,11 @@ log = "0.4"
 globset = "0.4"
 notify = "8"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+wedb_embed = "=0.1.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+unicode-normalization = "0.1"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"

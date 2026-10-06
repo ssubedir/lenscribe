@@ -9,8 +9,8 @@ use crate::{Error, Result};
 
 type Hash = [u8; 32];
 
-#[derive(Clone, Copy)]
-struct Child {
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Child {
     kind: u8,
     hash: Hash,
 }
@@ -21,6 +21,94 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
+    /// Persist only directories on the changed paths, including tombstones for
+    /// directories that became empty. File bytes and timestamps are excluded.
+    pub(crate) fn checkpoints(
+        &self,
+        paths: &[String],
+    ) -> BTreeMap<String, Option<BTreeMap<String, Child>>> {
+        let mut directories = std::collections::BTreeSet::from([String::new()]);
+        for path in paths {
+            let mut parent = split_path(path).0;
+            loop {
+                directories.insert(parent.to_owned());
+                if parent.is_empty() {
+                    break;
+                }
+                parent = split_path(parent).0;
+            }
+        }
+        directories
+            .into_iter()
+            .map(|path| {
+                let children = self.directories.get(&path).cloned();
+                (path, children)
+            })
+            .collect()
+    }
+
+    pub(crate) fn from_checkpoints(
+        directories: BTreeMap<String, BTreeMap<String, Child>>,
+        records: &[crate::FileRecord],
+        root: &str,
+    ) -> Result<Self> {
+        let tree = Self { directories };
+        let mut leaves = BTreeMap::new();
+        for (path, children) in &tree.directories {
+            if !path.is_empty() {
+                validate_relative_path(path)?;
+                let (parent, name) = split_path(path);
+                if tree
+                    .directories
+                    .get(parent)
+                    .and_then(|children| children.get(name))
+                    .is_none_or(|child| {
+                        child.kind != 1 || child.hash != directory_hash(Some(children))
+                    })
+                {
+                    return Err(Error::InvalidInput("disconnected Merkle checkpoint".into()));
+                }
+            }
+            for (name, child) in children {
+                if name.contains('/') {
+                    return Err(Error::InvalidInput("invalid Merkle child name".into()));
+                }
+                validate_relative_path(name)?;
+                let full = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                };
+                match child.kind {
+                    0 => {
+                        leaves.insert(full, hex::encode(child.hash));
+                    }
+                    1 => {
+                        if !tree.directories.contains_key(&full)
+                            || directory_hash(tree.directories.get(&full)) != child.hash
+                        {
+                            return Err(Error::InvalidInput(
+                                "invalid Merkle directory checkpoint".into(),
+                            ));
+                        }
+                    }
+                    _ => return Err(Error::InvalidInput("invalid Merkle node type".into())),
+                }
+            }
+        }
+        if tree.root_hash() != root
+            || leaves.len() != records.len()
+            || records
+                .iter()
+                .any(|record| leaves.get(&record.relative_path) != Some(&record.record_hash))
+        {
+            return Err(Error::InvalidInput(
+                "Merkle checkpoint does not match canonical files".into(),
+            ));
+        }
+        Ok(tree)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

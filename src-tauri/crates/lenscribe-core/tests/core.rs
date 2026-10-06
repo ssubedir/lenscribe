@@ -614,6 +614,56 @@ async fn http_serves_search_text_and_meaningful_missing_text_errors() {
         .clone()
         .oneshot(
             Request::builder()
+                .uri(format!("/search/page?q=cofee&folderId={folder_id}&limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let page: lenscribe_core::SearchPage = serde_json::from_slice(&bytes).unwrap();
+    let inspector = core.find_files(folder_id, "cofee", 0, true).unwrap();
+    assert_eq!(page.total, inspector.total);
+    assert_eq!(page.hits[0].file.id, inspector.files[0].id);
+    assert!(page.fuzzy_applied);
+    assert!(page.hits[0].snippet.contains("[coffee]"));
+    for (query, expected) in [
+        ("q=cofee&fuzzy=false", 0),
+        ("q=cofee&offset=1&limit=1", 0),
+        ("q=coffee%20OR%20unrelated", 0),
+        ("q=cofee", 1),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/search?{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let results: Vec<lenscribe_core::SearchHit> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(results.len(), expected, "query: {query}");
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/search/page?q=coffee&folderId=999999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
                 .uri(format!("/files/{}/text", file.id))
                 .body(Body::empty())
                 .unwrap(),

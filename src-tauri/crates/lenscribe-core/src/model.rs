@@ -82,6 +82,37 @@ pub struct ExtractionJob {
 pub struct FilePage {
     pub files: Vec<FileRecord>,
     pub total: usize,
+    pub notice: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    pub total: usize,
+    pub fuzzy_applied: bool,
+    pub notice: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceStatus {
+    pub indexed_files: usize,
+    pub cached_extractions: usize,
+    pub unused_cached_extractions: usize,
+    pub cache_bytes: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceReport {
+    pub scanned_folders: usize,
+    pub changed_files: usize,
+    pub removed_files: usize,
+    pub issues: Vec<ScanIssue>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

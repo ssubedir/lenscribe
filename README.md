@@ -36,9 +36,10 @@
 - **Extracts readable text** with a hosted or local vision model.
 - **Keeps text with the image** as an appended UTF-8 trailer, preserving the original image bytes.
 - **Reuses extraction results** for matching image hashes and model settings.
-- **Tracks changes with a Merkle tree** and maintains a local SQLite search index.
+- **Tracks changes with a Merkle tree** and stores its local index, queue, and cache in WeDB.
 - **Recovers pending work across restarts**, with retries, concurrency controls, and request rate limits.
 - **Lets you inspect, edit, and reprocess files** from the settings window.
+- **Keeps search and recovery local** with fuzzy matching, database backups, index rebuilds, and cache cleanup.
 - **Fits into a desktop workflow** with a system tray, start at login, and light/dark themes.
 
 ## Install
@@ -66,7 +67,7 @@ This README describes the source tree. To use changes added since the latest rel
 
 Automatic extraction is off until you enable it. Scanning by itself indexes files and existing text without sending images to a model.
 
-You can close the settings window while processing continues. Reopen it from the system tray, or choose **Quit Lenscribe** there to stop the app. **General** contains pause/resume, startup, and appearance settings.
+You can close the settings window while processing continues. Reopen it from the system tray, or choose **Quit Lenscribe** there to stop the app. **General** contains pause/resume, startup, appearance settings, and **Index & Cache** maintenance tools.
 
 ### Supported providers
 
@@ -129,16 +130,37 @@ curl "http://127.0.0.1:47831/files/1/text"
 
 In Windows PowerShell, use `curl.exe` to call the curl executable explicitly.
 
-| Endpoint              | Returns                                |
-| --------------------- | -------------------------------------- |
-| `GET /health`         | Readiness and version                  |
-| `GET /folders`        | Indexed folders                        |
-| `GET /folders/:id`    | Folder details, files, and Merkle root |
-| `GET /files/:id`      | File details and extracted text        |
-| `GET /files/:id/text` | Extracted text as plain UTF-8          |
-| `GET /search?q=…`     | Ranked matches with snippets           |
+| Endpoint               | Returns                                            |
+| ---------------------- | -------------------------------------------------- |
+| `GET /health`          | Readiness and version                              |
+| `GET /folders`         | Indexed folders                                    |
+| `GET /folders/:id`     | Folder details, files, and Merkle root             |
+| `GET /files/:id`       | File details and extracted text                    |
+| `GET /files/:id/text`  | Extracted text as plain UTF-8                      |
+| `GET /search?q=…`      | Ranked matches with snippets                       |
+| `GET /search/page?q=…` | Matches, snippets, total count, and search notices |
 
-Search supports optional `folderId` and `limit` parameters, up to 100 results. The API runs while Lenscribe is open in the background. It is read-only, binds to IPv4 loopback, has no authentication, and does not enable browser CORS. Other processes on your computer can query it when enabled.
+Search uses the same filename and extracted-text matching as the file inspector, including word prefixes and common typos. Exact filename matches come first, then exact text matches, then fuzzy matches. Query words are treated as text, not search operators. If fuzzy expansion exceeds its limits, search returns exact matches with a notice in `/search/page`.
+
+Both search endpoints accept optional `folderId`, `offset`, and `limit` parameters, up to 100 results per page. Set `fuzzy=false` for literal substring matching. `/search` returns an array; `/search/page` returns `hits`, `total`, `fuzzyApplied`, and `notice`. For example:
+
+```sh
+curl -G --data-urlencode "q=cofee" --data-urlencode "offset=20" --data-urlencode "limit=20" "http://127.0.0.1:47831/search/page"
+```
+
+The API runs while Lenscribe is open in the background. It is read-only, binds to IPv4 loopback, has no authentication, and does not enable browser CORS. Other processes on your computer can query it when enabled.
+
+## Maintain your index
+
+Open **General → Index & Cache** to use these tools:
+
+- **Export Backup** saves a checksummed Lenscribe backup of file records, cached extractions, queued work, saved responses, and recovery state while the app is running. Choose a new filename; existing files are not overwritten. Back up your images and `settings.json` separately.
+- **Rebuild Index** scans known folders, imports their embedded text, and rebuilds search. It reports unavailable folders and preserves their existing records. Rebuilding does not modify images or call a model; if automatic extraction is enabled, newly discovered pending images enter its normal queue.
+- **Clear Unused Cache** removes cached extractions that no indexed image currently references. This clears reuse history for removed images or older extraction settings; embedded text and current file records remain in place.
+
+Existing SQLite data is imported once into `index.wedb`, preserving the original database. SQLite is used only by the optional migration reader. See [storage and migration](docs/development.md#storage-and-migration) for backup restoration and rollback details.
+
+WeDB stores the durable extraction queue. Workers claim bounded batches of ready jobs, honor persisted retries, and briefly defer images that are locked or still changing. Successful model responses are synced before writing their image trailers, so interrupted writes can resume without another model request. Before extraction, an image must have stable size and modification time for one second; the existing hash check rejects stale jobs and prevents committing results to changed images.
 
 ## How the text stays with the image
 
@@ -146,7 +168,7 @@ Lenscribe uses **end-of-file (EOF) steganography**: it stores extracted text aft
 
 The text is intentionally readable and unencrypted, so ordinary file tools can search it. This is the [appended-data approach to steganography](https://www.trinitycyber.com/hubfs/appended-data.pdf).
 
-The original bytes have a SHA-256 hash. That hash and the extraction settings identify reusable results, while a directory Merkle tree tracks changes to filenames, image content, and saved text. A separate SQLite index makes local search fast and can import trailers from processed files when scanning them.
+The original bytes have a SHA-256 hash. That hash and the extraction settings identify reusable results, while a directory Merkle tree tracks changes to filenames, image content, and saved text. WeDB stores the canonical records. Local search indexes are rebuilt from those records at startup without calling a model, and scans can import trailers from processed files.
 
 Compatibility depends on image readers tolerating trailing data. Re-saving or re-encoding an image in another application may discard its appended text. PNG and WebP decoding are covered by tests; JPEG byte preservation is tested. See [architecture and file format](docs/architecture.md) for the details.
 
