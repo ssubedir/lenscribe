@@ -255,7 +255,7 @@ async fn backoff_attempts_and_errors_survive_reopening_the_database() {
     daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
-    let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let reopened = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let restarted = Daemon::load(
         reopened,
         temporary.path().join("settings.json"),
@@ -293,7 +293,7 @@ async fn authentication_failure_stays_blocked_after_restart_until_the_key_change
     daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
-    let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let reopened = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let restarted = Daemon::load(
         reopened,
         temporary.path().join("settings.json"),
@@ -326,7 +326,7 @@ async fn request_pacing_survives_restart_and_manual_retry() {
     daemon.shutdown().await.unwrap();
     drop(daemon);
     drop(core);
-    let reopened = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let reopened = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let restarted = Daemon::load(
         reopened,
         temporary.path().join("settings.json"),
@@ -581,7 +581,7 @@ fn setup(settings: ExtractionSettings) -> (TempDir, Arc<Core>, Arc<Daemon>, Sett
         include_bytes!("fixtures/pixel.jpg"),
     )
     .unwrap();
-    let core = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let core = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let daemon = Daemon::load(
         core.clone(),
         temporary.path().join("settings.json"),

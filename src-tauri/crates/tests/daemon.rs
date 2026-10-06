@@ -22,7 +22,7 @@ fn setup() -> (TempDir, PathBuf, Arc<Core>, Arc<Daemon>) {
         include_bytes!("fixtures/pixel.jpg"),
     )
     .unwrap();
-    let core = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let core = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let daemon = Daemon::load(
         core.clone(),
         temporary.path().join("settings.json"),
@@ -198,7 +198,7 @@ async fn saved_configuration_restores_watches_api_and_backlog_without_a_ui() {
         include_bytes!("fixtures/pixel.jpg"),
     )
     .unwrap();
-    let core = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let core = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     let restored = Daemon::load(
         core.clone(),
         temporary.path().join("settings.json"),

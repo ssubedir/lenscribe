@@ -1,9 +1,6 @@
 use crate::{Error, FileRecord, FolderRecord, Result};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::Path};
 use wedb_embed::engine::KvEntry;
 use wedb_embed::{Engine, Fjall, Partition, WeDb};
 
@@ -35,7 +32,6 @@ impl Change {
 }
 
 pub(super) struct Store {
-    pub path: PathBuf,
     pub db: WeDb<Fjall>,
     pub records: wedb_embed::engine::fjall::FjallPartition,
     // Drop the engine before deleting an ephemeral database (important on Windows).
@@ -44,21 +40,13 @@ pub(super) struct Store {
     pub fail_sync: std::cell::Cell<bool>,
 }
 impl Store {
-    pub fn storage_path(path: &Path) -> PathBuf {
-        if path.extension().is_some_and(|ext| ext == "sqlite") {
-            path.with_extension("wedb")
-        } else {
-            path.to_owned()
-        }
-    }
     pub fn open(path: &Path) -> Result<Self> {
         let temporary = (path == Path::new(":memory:"))
             .then(tempfile::tempdir)
             .transpose()?;
-        let path = temporary.as_ref().map_or_else(
-            || Self::storage_path(path),
-            |temp| temp.path().join("index.wedb"),
-        );
+        let path = temporary
+            .as_ref()
+            .map_or_else(|| path.to_owned(), |temp| temp.path().join("index.wedb"));
         if path.is_file() {
             return Err(Error::InvalidInput(
                 "WeDB storage must be a directory".into(),
@@ -74,7 +62,6 @@ impl Store {
         let engine = Fjall::open_with_cfg(builder, data, meta).map_err(storage_error)?;
         let records = engine.partition("lenscribe-v1").map_err(storage_error)?;
         Ok(Self {
-            path,
             db: WeDb::new(engine),
             records,
             _temporary: temporary,
@@ -119,7 +106,7 @@ impl Store {
         if changes.is_empty() {
             return Ok(());
         }
-        // Shared text bodies may appear repeatedly in a scan/import. Keep only
+        // Shared text bodies may appear repeatedly in a scan. Keep only
         // the final mutation for each key before constructing the WAL batch.
         let unique: BTreeMap<_, _> = changes.iter().map(|change| (&change.key, change)).collect();
         let mut batch = self.db.batch_with_capacity(unique.len());

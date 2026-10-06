@@ -159,7 +159,7 @@ Open **General → Index & Cache** to use these tools:
 - **Rebuild Index** scans known folders, imports their embedded text, and rebuilds search. It reports unavailable folders and preserves their existing records. Rebuilding does not modify images or call a model; if automatic extraction is enabled, newly discovered pending images enter its normal queue.
 - **Clear Unused Cache** removes cached extractions that no indexed image currently references. This clears reuse history for removed images or older extraction settings; embedded text and current file records remain in place.
 
-Existing SQLite data is imported once into `index.wedb`, preserving the original database. SQLite is used only by the optional migration reader. See [storage and migration](docs/development.md#storage-and-migration) for backup restoration and rollback details.
+WeDB stores the index, extraction cache, and durable queue in `index.wedb`. See [storage and backups](docs/development.md#storage-and-backups) for backup and recovery details.
 
 WeDB stores the durable extraction queue. Workers claim bounded batches of ready jobs, honor persisted retries, and briefly defer images that are locked or still changing. Successful model responses are synced before writing their image trailers, so interrupted writes can resume without another model request. Before extraction, an image must have stable size and modification time for one second; the existing hash check rejects stale jobs and prevents committing results to changed images.
 

@@ -150,8 +150,6 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-features --locked
-      - name: Test core without SQLite migration support
-        run: cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --no-default-features --locked
       - name: Lint Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
       - name: Build native app

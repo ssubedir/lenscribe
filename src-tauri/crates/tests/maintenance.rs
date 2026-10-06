@@ -12,7 +12,7 @@ fn live_backup_preserves_cache_queue_and_text_and_never_overwrites_files() {
         include_bytes!("fixtures/pixel.jpg"),
     )
     .unwrap();
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let folder = core.scan_folder(&images).unwrap().folder.id;
     let file = core.snapshot(folder).unwrap().files.remove(0);
     core.attach_text(
@@ -46,7 +46,7 @@ fn live_backup_preserves_cache_queue_and_text_and_never_overwrites_files() {
     assert!(core.backup_database(&backup).is_err());
     assert_eq!(fs::read(&backup).unwrap(), original);
     assert!(core
-        .backup_database(temp.path().join("index.sqlite"))
+        .backup_database(temp.path().join("index.wedb"))
         .is_err());
 }
 
@@ -57,7 +57,7 @@ fn rebuild_reimports_trailers_repairs_search_and_retains_unavailable_folders() {
     fs::create_dir(&images).unwrap();
     let image = images.join("receipt.jpg");
     fs::write(&image, include_bytes!("fixtures/pixel.jpg")).unwrap();
-    let index = temp.path().join("index.sqlite");
+    let index = temp.path().join("index.wedb");
     let core = Core::open(&index).unwrap();
     let folder = core.scan_folder(&images).unwrap().folder.id;
     let file = core.snapshot(folder).unwrap().files.remove(0);
@@ -190,7 +190,7 @@ fn cache_cleanup_retains_referenced_results_and_does_not_touch_images() {
     fs::create_dir(&images).unwrap();
     let image = images.join("receipt.jpg");
     fs::write(&image, include_bytes!("fixtures/pixel.jpg")).unwrap();
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let folder = core.scan_folder(&images).unwrap().folder.id;
     let file = core.snapshot(folder).unwrap().files.remove(0);
     core.attach_text(
@@ -245,7 +245,7 @@ fn temporarily_locked_images_keep_their_existing_index_entries() {
     fs::create_dir(&images).unwrap();
     let image = images.join("receipt.jpg");
     fs::write(&image, include_bytes!("fixtures/pixel.jpg")).unwrap();
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let folder = core.scan_folder(&images).unwrap().folder.id;
     let file = core.snapshot(folder).unwrap().files.remove(0);
     core.attach_text(

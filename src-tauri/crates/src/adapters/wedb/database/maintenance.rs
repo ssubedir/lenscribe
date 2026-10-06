@@ -108,9 +108,10 @@ impl<'a> MaintenanceRepository<'a> {
         Ok(removed)
     }
     pub fn backup(&self, destination: &Path) -> Result<()> {
-        if destination.exists() || destination == self.database.store.path.with_extension("sqlite")
-        {
-            return Err(Error::InvalidInput("choose a new backup filename; destination already exists or is reserved for storage".into()));
+        if destination.exists() {
+            return Err(Error::InvalidInput(
+                "choose a new backup filename; destination already exists".into(),
+            ));
         }
         let records = self.database.store.scan::<serde_json::Value>("")?;
         let checksum = crate::trailer::hash_bytes(&serde_json::to_vec(&records)?);
@@ -135,8 +136,7 @@ impl<'a> MaintenanceRepository<'a> {
     }
 }
 pub(crate) fn restore(backup: &Path, destination: &Path) -> Result<()> {
-    let storage_path = Store::storage_path(destination);
-    if destination == Path::new(":memory:") || destination.exists() || storage_path.exists() {
+    if destination == Path::new(":memory:") || destination.exists() {
         return Err(Error::InvalidInput(
             "restore requires a new storage directory".into(),
         ));
@@ -158,12 +158,12 @@ pub(crate) fn restore(backup: &Path, destination: &Path) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     // Reserve the destination atomically so an existing store can never be merged
     // into or overwritten, including if another process creates it during validation.
-    if let Some(parent) = storage_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+    if let Some(parent) = destination.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::create_dir(&storage_path)?;
-    // A single batch includes the schema marker: an interrupted import cannot look complete.
-    let store = Store::open(&storage_path)?;
+    std::fs::create_dir(destination)?;
+    // A single batch includes the schema marker: an interrupted restore cannot look complete.
+    let store = Store::open(destination)?;
     store.commit(&changes)?;
     let state = super::store::State::load(&store)?;
     super::search::SearchIndex::load(&store, &state)?;

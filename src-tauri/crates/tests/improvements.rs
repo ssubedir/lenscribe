@@ -25,7 +25,7 @@ fn targeted_changes_hash_only_affected_files_and_match_full_merkle_rebuild() {
     png(&root.join("a.png"), [1, 2, 3]);
     png(&root.join("b.png"), [4, 5, 6]);
     png(&root.join("notes/c.png"), [7, 8, 9]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let initial = core.scan_folder(&root).unwrap();
     assert_eq!(initial.inspected, 3);
     assert_eq!(core.reconcile_folder(&root).unwrap().inspected, 0);
@@ -70,7 +70,7 @@ fn parent_directory_events_do_not_rehash_unrelated_images_or_hide_file_events() 
     png(&root.join("nested/changed.png"), [1, 2, 3]);
     png(&root.join("nested/unchanged.png"), [4, 5, 6]);
     png(&root.join("root.png"), [7, 8, 9]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     let path = root.join("nested/changed.png");
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
@@ -101,7 +101,7 @@ fn directory_renames_and_deletions_reconcile_the_subtree_and_prune_search() {
     fs::create_dir_all(root.join("old/deep")).unwrap();
     png(&root.join("old/deep/note.png"), [1, 2, 3]);
     png(&root.join("keep.png"), [4, 5, 6]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     let file = core
         .snapshot(first.folder.id)
@@ -163,7 +163,7 @@ fn aliased_event_paths_stay_scoped_for_changes_renames_and_deletions() {
     fs::create_dir_all(root.join("old/deep")).unwrap();
     png(&root.join("old/deep/note.png"), [1, 2, 3]);
     png(&root.join("keep.png"), [4, 5, 6]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     #[cfg(windows)]
     let alias = std::path::PathBuf::from(root.to_string_lossy().to_ascii_lowercase());
@@ -226,7 +226,7 @@ fn aliased_root_events_still_prune_symlinked_subtrees_inside_the_folder() {
     png(&root.join("keep/note.png"), [4, 5, 6]);
     let alias = temp.path().join("alias");
     std::os::unix::fs::symlink(&root, &alias).unwrap();
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     fs::remove_dir_all(root.join("old")).unwrap();
     std::os::unix::fs::symlink(root.join("keep"), root.join("old")).unwrap();
@@ -251,7 +251,7 @@ fn exclusions_prune_the_index_and_queue_without_changing_image_text() {
     png(&root.join("keep.png"), [1, 2, 3]);
     png(&root.join("nested/temp/note.png"), [4, 5, 6]);
     png(&root.join("nested/pic-thumbnail.png"), [7, 8, 9]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     let file = core
         .snapshot(first.folder.id)
@@ -295,7 +295,7 @@ fn size_rules_measure_original_bytes_and_invalid_patterns_are_rejected() {
     let root = temp.path().join("images");
     fs::create_dir(&root).unwrap();
     png(&root.join("small.png"), [1, 2, 3]);
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let first = core.scan_folder(&root).unwrap();
     let file = core.snapshot(first.folder.id).unwrap().files[0].clone();
     core.attach_text(
@@ -341,7 +341,7 @@ fn cached_extractions_survive_removal_restart_and_preserve_empty_text() {
     let root = temp.path().join("images");
     fs::create_dir(&root).unwrap();
     png(&root.join("empty.png"), [1, 2, 3]);
-    let database = temp.path().join("index.sqlite");
+    let database = temp.path().join("index.wedb");
     let core = Core::open(&database).unwrap();
     let report = core.scan_folder(&root).unwrap();
     let file = core.snapshot(report.folder.id).unwrap().files[0].clone();
@@ -375,7 +375,7 @@ fn durable_reprocessing_keeps_existing_text_and_manual_edits_invalidate_old_jobs
     let root = temp.path().join("images");
     fs::create_dir(&root).unwrap();
     png(&root.join("note.png"), [1, 2, 3]);
-    let database = temp.path().join("index.sqlite");
+    let database = temp.path().join("index.wedb");
     let core = Core::open(&database).unwrap();
     let report = core.scan_folder(&root).unwrap();
     let file = core.snapshot(report.folder.id).unwrap().files[0].clone();
@@ -437,7 +437,7 @@ fn inspector_filename_filter_is_literal_and_pages_large_folders() {
     for index in 0..56 {
         png(&root.join(format!("image-{index:02}.png")), [1, 2, 3]);
     }
-    let core = Core::open(temp.path().join("index.sqlite")).unwrap();
+    let core = Core::open(temp.path().join("index.wedb")).unwrap();
     let report = core.scan_folder(root).unwrap();
     let page = core.list_files(report.folder.id, "", 0).unwrap();
     assert_eq!((page.total, page.files.len()), (56, 50));
@@ -468,7 +468,7 @@ fn inspector_text_search_follows_edits_removals_and_restarts() {
     let root = temp.path().join("images");
     fs::create_dir(&root).unwrap();
     png(&root.join("note.png"), [1, 2, 3]);
-    let database = temp.path().join("index.sqlite");
+    let database = temp.path().join("index.wedb");
     let core = Core::open(&database).unwrap();
     let report = core.scan_folder(&root).unwrap();
     let file = core.snapshot(report.folder.id).unwrap().files.remove(0);

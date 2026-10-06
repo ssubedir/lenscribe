@@ -41,7 +41,7 @@ fn setup() -> (TempDir, PathBuf, Arc<Core>) {
     let temporary = tempdir().unwrap();
     let images = temporary.path().join("images");
     fs::create_dir(&images).unwrap();
-    let core = Arc::new(Core::open(temporary.path().join("index.sqlite")).unwrap());
+    let core = Arc::new(Core::open(temporary.path().join("index.wedb")).unwrap());
     (temporary, images, core)
 }
 
@@ -286,7 +286,7 @@ fn webp_files_scan_prepare_search_and_reopen_with_stable_merkle_identity() {
         original
     );
     drop(core);
-    let reopened = Core::open(temporary.path().join("index.sqlite")).unwrap();
+    let reopened = Core::open(temporary.path().join("index.wedb")).unwrap();
     assert_eq!(
         reopened
             .snapshot(initial.folder.id)
@@ -429,7 +429,7 @@ fn index_text_search_and_database_reopen_preserve_identity() {
     assert_ne!(report.folder.root_hash, stable.folder.root_hash);
     let root = stable.folder.root_hash;
     drop(core);
-    let reopened = Core::open(temporary.path().join("index.sqlite")).unwrap();
+    let reopened = Core::open(temporary.path().join("index.wedb")).unwrap();
     assert_eq!(reopened.snapshot(folder_id).unwrap().folder.root_hash, root);
     assert_eq!(
         reopened.search("coffee", None, 20).unwrap()[0].file.id,

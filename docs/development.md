@@ -53,13 +53,12 @@ bunx prettier --check "*.md" docs
 bun run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-features --locked
-cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --no-default-features --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
 ```
 
 `bun run check` verifies generated Rust/TypeScript bindings and Svelte types. Run `bun run types:generate` after changing serialized Rust DTOs.
 
-Frontend tests use Bun and compile the real Svelte rune controller. They cover draft preservation, stale responses, validation, preview isolation, updater coordination, and release scripts. Rust tests cover trailers and decoding, Merkle identity, search, migrations, live watches, configuration, retries, cache reuse, concurrent extraction, and cancellation. Model tests use local mock HTTP servers; real provider credentials are not needed.
+Frontend tests use Bun and compile the real Svelte rune controller. They cover draft preservation, stale responses, validation, preview isolation, updater coordination, and release scripts. Rust tests cover trailers and decoding, Merkle identity, search, storage recovery, live watches, configuration, retries, cache reuse, concurrent extraction, and cancellation. Model tests use local mock HTTP servers; real provider credentials are not needed.
 
 Use `bun run format` for Svelte, TypeScript, CSS, scripts, and workflow files, and `cargo fmt --manifest-path src-tauri/Cargo.toml --all` for Rust. Generated bindings are excluded from manual formatting.
 
@@ -109,11 +108,11 @@ cargo run --manifest-path src-tauri/Cargo.toml -p lenscribe-core --bin lenscribe
 
 The database defaults to `index.wedb` beside the configuration. An optional final argument supplies a different database path. Omitted extraction settings default to disabled. Port zero requests an available port. The runner writes startup status to stdout and diagnostics/watch events to stderr. OS login registration belongs to the desktop app.
 
-## Storage and migration
+## Storage and backups
 
-Canonical records live in the `index.wedb` directory. On the first open, the app imports a sibling `index.sqlite` if present, preserving file and folder IDs, extracted text, cache entries, queued requests, retry state, and Merkle roots. It validates the import before atomically writing its schema marker. An interrupted or rejected import can be retried; the SQLite source is never changed. Once initialized, WeDB is the only runtime database.
+Canonical records live in the `index.wedb` directory. WeDB is the only storage backend, holding file and folder IDs, extracted text, cache entries, queued requests, retry state, and Merkle roots. Existing WeDB stores and logical backups retain their schema and remain compatible.
 
-The original SQLite file is a snapshot from before migration; subsequent work is stored only in WeDB. Keep it until you have verified the migration. To roll back the application, quit Lenscribe first and preserve both stores, your images, and `settings.json` before running an older version. Older versions cannot read WeDB or its logical backups. Processed images still carry their text trailers, but newer queue and recovery state will not appear in the old SQLite snapshot.
+This version no longer imports SQLite databases or remaps `.sqlite` paths to WeDB directories. SQLite-only installations need an earlier release with migration support before upgrading; old database files are left untouched. Rescanning processed images recovers their embedded text, but cannot recover the old database's cache, queue, or retry state.
 
 Use **General → Export Backup** for a consistent `.lenscribe-backup` file while Lenscribe runs. Do not copy a live WeDB directory as a backup. Images and settings are separate and are not included in the export. The current restore entry point is the Rust core API; there is no restore button yet:
 
@@ -122,8 +121,6 @@ let core = lenscribe_core::Core::restore_database("saved.lenscribe-backup", "res
 ```
 
 Restoration validates the checksum, schema, text hashes, IDs, and references before reserving a new destination directory. Existing files and directories are rejected. Point the headless runner at the restored directory, or quit the desktop app and move the validated restored directory into the application's data location after preserving its current store. Only one process can open a store at a time.
-
-The `legacy-sqlite` feature is enabled by default only to support existing installations. `cargo test --manifest-path src-tauri/Cargo.toml -p lenscribe-core --no-default-features --locked` tests the core with SQLite entirely absent. Such a build cannot import a legacy SQLite database.
 
 ## Logs and troubleshooting
 

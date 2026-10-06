@@ -15,7 +15,6 @@ src-tauri/
 │   │   ├── ports/           # Storage, filesystem, vision, settings, and watcher contracts
 │   │   ├── adapters/        # WeDB, filesystem, LLM, and HTTP implementations
 │   │   └── runtime/         # Daemon lifecycle and background coordination
-│   ├── migrations/          # Legacy SQLite schemas for migration fixtures
 │   └── tests/               # Core integration tests
 └── src/                     # Tauri entry point and desktop commands
 
@@ -50,11 +49,11 @@ The index port separates catalog, extraction queue, recovery, and maintenance ca
 
 Add new business policies to `domain`, workflows to `application`, and external integrations to `adapters`. Keep concrete wiring in `composition` or `runtime`. The adapter-injection tests exercise background processing with an in-memory settings store and a fake vision provider, plus image-write failure recovery through a replaced filesystem port.
 
-Canonical storage uses a versioned Lenscribe keyspace in WeDB. An unsupported schema is rejected. The one-time importer reads a consistent SQLite transaction, preserves IDs, text, cache, queue generations, retries, and Merkle roots, validates references and hashes, then commits the imported records and schema marker together. It never updates or removes the original SQLite database. The default `legacy-sqlite` feature supplies this reader; `--no-default-features` builds the core without SQLite. Existing data requiring migration is rejected when that feature is absent.
+Canonical storage uses a versioned Lenscribe keyspace in WeDB. Opening a repository uses the requested directory directly, initializes a new store atomically, and rejects unsupported schemas. SQLite import and path remapping have been removed. Existing WeDB records and backups keep their current schema.
 
 The storage facade sits behind the core mutex, which serializes mutations including read/modify/write operations. Repositories expose application operations such as file lookup, queue claims, response saving, and failure recording. Canonical records use an application-owned keyspace rather than WeDB internal Redis encodings. A scan batches file records, immutable text bodies, cache pointers, stale-job cleanup, Merkle checkpoints, and the folder root atomically. Failure records and endpoint state also share a batch. Each critical batch is followed by `persist()` (Fjall `SyncAll`); projections become visible only after that sync succeeds. A failed sync stops further writes until reopening.
 
-The desktop profile budgets 32 MiB for the block cache, 8 MiB for data memtables, 4 MiB for metadata memtables, 128 MiB for journal rotation, and two background workers. These are storage budgets, not a total RAM limit: metadata, queue projections, search postings, and transient operations also use memory. Fjall holds an exclusive database lock. Graceful daemon shutdown waits for extraction and API tasks and performs a final sync. Tauri, HTTP, and TypeScript contracts remain stable, and existing Rust module paths and facade methods remain available. Watcher and legacy database errors now carry messages instead of concrete adapter error types, keeping the shared error contract independent of `notify` and `rusqlite`.
+The desktop profile budgets 32 MiB for the block cache, 8 MiB for data memtables, 4 MiB for metadata memtables, 128 MiB for journal rotation, and two background workers. These are storage budgets, not a total RAM limit: metadata, queue projections, search postings, and transient operations also use memory. Fjall holds an exclusive database lock. Graceful daemon shutdown waits for extraction and API tasks and performs a final sync. Tauri, HTTP, and TypeScript contracts remain stable, and existing Rust module paths and facade methods remain available. Watcher and storage errors carry messages instead of concrete adapter error types, keeping the shared error contract independent of adapter libraries.
 
 ### Canonical key layout
 
@@ -88,11 +87,11 @@ Windows x64 debug measurements on October 5, 2026:
 | 10,000 | 1.46 s | 26 ms | 34 ms | 5 µs | 1.54 s | 78.4 MiB |
 | 100,000 | 25.23 s | 780 ms | 1.04 s | 12 µs | 16.33 s | 719.1 MiB |
 
-These are regression probes, not production benchmarks or a total memory guarantee. Every synthetic record has a unique image hash and a distinct filename, but shares one short transcription to exercise deduplication. Searches return 50 snippets and count all matches; reopening excludes filesystem hashing and scans. Warm queue measurements exclude the initial projection build. Peak memory is sampled across the entire test process, including fixture vectors, two stores, transient batches, search projections, and the SQLite comparison. Larger unique transcriptions need additional memory. Background compilation was running during this sample; release builds and other machines need separate measurements.
+These are historical regression probes, not production benchmarks or a total memory guarantee. Every synthetic record has a unique image hash and a distinct filename, but shares one short transcription to exercise deduplication. Searches return 50 snippets and count all matches; reopening excludes filesystem hashing and scans. Warm queue measurements exclude the initial projection build. Peak memory was sampled across the original test process, including fixture vectors, two stores, transient batches, search projections, and a SQLite comparison fixture that has since been removed. Larger unique transcriptions need additional memory. Background compilation was running during this sample; release builds and other machines need separate measurements.
 
-The SQLite fixture uses WAL with full sync and the previous FTS triggers/cache writes. Its 10,000/100,000-record batches took 1.12/21.20 seconds; literal count-only queries took 11/129 ms. It does not implement the same fuzzy, ranking, pagination, or snippet workload, so these numbers do not establish an overall speed advantage for either implementation. Search rebuild time and peak memory remain the main large-library limitations of the current WeDB integration.
+Search rebuild time and peak memory remain the main large-library limitations of the current WeDB integration.
 
-Tests also kill a subprocess after a synced response, reclaim its abandoned lease, reconcile a trailer written before acknowledgement, inject an uncertain sync failure, reject inconsistent backups, verify migration source preservation, and exercise live watchers and locked Windows files. CI checks both the default migration-enabled build and the SQLite-free core across the native platform matrix; cross-platform runs must be started manually.
+Tests also kill a subprocess after a synced response, reclaim its abandoned lease, reconcile a trailer written before acknowledgement, inject an uncertain sync failure, reject inconsistent backups and unsupported schemas, and exercise live watchers and locked Windows files. CI tests the WeDB core and desktop app across the native platform matrix; cross-platform runs must be started manually.
 
 ## Image trailer format
 

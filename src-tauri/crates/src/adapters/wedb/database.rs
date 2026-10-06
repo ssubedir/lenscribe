@@ -3,8 +3,6 @@ mod cache;
 mod files;
 mod folders;
 mod jobs;
-#[cfg(feature = "legacy-sqlite")]
-mod legacy;
 mod maintenance;
 mod recovery;
 mod search;
@@ -48,21 +46,6 @@ impl Database {
         let store = Store::open(path)?;
         if store.get::<u32>("schema")?.is_none() {
             let changes = vec![Change::put("schema", &store::SCHEMA)?];
-            let old = store.path.with_extension("sqlite");
-            #[cfg(feature = "legacy-sqlite")]
-            let changes = {
-                let mut changes = changes;
-                if old.is_file() {
-                    changes.extend(legacy::import(&old)?);
-                }
-                changes
-            };
-            #[cfg(not(feature = "legacy-sqlite"))]
-            if old.is_file() {
-                return Err(Error::InvalidInput(
-                    "existing SQLite data requires the legacy-sqlite migration feature".into(),
-                ));
-            }
             store.commit(&changes)?;
         }
         if store.get::<u32>("schema")? != Some(store::SCHEMA) {

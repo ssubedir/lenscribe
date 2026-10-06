@@ -24,6 +24,71 @@ fn details(folder_id: i64, path: &str, image: u8, text: Option<&str>) -> FileDet
 }
 
 #[test]
+fn opening_a_file_rejects_it_without_modification_or_path_remapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("index.sqlite");
+    let original = b"SQLite format 3\0old database contents";
+    std::fs::write(&path, original).unwrap();
+
+    assert!(matches!(
+        Database::open(&path),
+        Err(crate::Error::InvalidInput(_))
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(!path.with_extension("wedb").exists());
+}
+
+#[test]
+fn wedb_persists_independently_of_a_neighboring_old_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let old_path = temp.path().join("index.sqlite");
+    let original = b"SQLite format 3\0old database contents";
+    std::fs::write(&old_path, original).unwrap();
+    let path = temp.path().join("index.wedb");
+    let mut database = Database::open(&path).unwrap();
+    assert!(database.folders().list().unwrap().is_empty());
+    let folder = database.folders().ensure("images").unwrap();
+    database
+        .apply_changes(
+            folder,
+            &[details(folder, "receipt.png", 1, Some("coffee"))],
+            &[],
+            "root",
+        )
+        .unwrap();
+    drop(database);
+
+    let database = Database::open(&path).unwrap();
+    assert_eq!(database.folders().get(folder).unwrap().image_count, 1);
+    assert_eq!(
+        database.search().query("coffee", None, 10).unwrap().len(),
+        1
+    );
+    assert_eq!(std::fs::read(&old_path).unwrap(), original);
+}
+
+#[test]
+fn opening_an_unsupported_wedb_schema_preserves_its_marker() {
+    use super::store::{Change, Store, SCHEMA};
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("index.wedb");
+    let schema = SCHEMA + 1;
+    let store = Store::open(&path).unwrap();
+    store
+        .commit(&[Change::put("schema", &schema).unwrap()])
+        .unwrap();
+    drop(store);
+
+    assert!(matches!(
+        Database::open(&path),
+        Err(crate::Error::InvalidInput(_))
+    ));
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get::<u32>("schema").unwrap(), Some(schema));
+}
+
+#[test]
 fn inspector_searches_names_and_text_with_exact_matches_first_and_folder_scoping() {
     let mut database = Database::open(Path::new(":memory:")).unwrap();
     let folder = database.folders().ensure("images").unwrap();
@@ -393,7 +458,7 @@ fn durable_queue_returns_bounded_ready_jobs_and_preserves_deferrals_and_attempts
 #[test]
 fn deferred_jobs_and_retry_attempts_survive_reopening_and_manual_retry() {
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("index.sqlite");
+    let path = temporary.path().join("index.wedb");
     let mut database = Database::open(&path).unwrap();
     let folder = database.folders().ensure("images").unwrap();
     database
@@ -792,101 +857,6 @@ fn shared_text_bodies_keep_manual_edits_independent_on_identical_images() {
     );
 }
 
-#[cfg(feature = "legacy-sqlite")]
-#[test]
-fn legacy_sqlite_import_preserves_ids_text_cache_jobs_recovery_and_the_original() {
-    use rusqlite::params;
-    for version in [1, 4] {
-        let temp = tempfile::tempdir().unwrap();
-        let legacy = temp.path().join("index.sqlite");
-        let connection = rusqlite::Connection::open(&legacy).unwrap();
-        connection
-            .execute_batch(include_str!("../../../../migrations/001-index.sql"))
-            .unwrap();
-        if version == 4 {
-            crate::adapters::wedb::migrations::apply(&connection).unwrap();
-        }
-        let file = details(17, "receipt.png", 1, Some("migration coffee"));
-        connection
-            .execute(
-                "INSERT INTO folders(id,path,root_hash) VALUES(17,'images','root')",
-                [],
-            )
-            .unwrap();
-        connection.execute("INSERT INTO files(id,folder_id,relative_path,image_hash,image_length,text_hash,record_hash,processor,text) VALUES(42,17,?1,?2,1,?3,?4,?5,?6)",params![file.file.relative_path,file.file.image_hash,file.file.text_hash,file.file.record_hash,file.file.processor,file.text]).unwrap();
-        if version == 4 {
-            connection
-                .execute(
-                    "INSERT INTO extraction_cache VALUES(?1,'fixture/v1','migration coffee')",
-                    [&file.file.image_hash],
-                )
-                .unwrap();
-            connection.execute("INSERT INTO extraction_jobs(id,file_id,image_hash,force,ready_at_ms) VALUES(81,42,?1,1,1000)",[&file.file.image_hash]).unwrap();
-            connection
-                .execute(
-                    "INSERT INTO extraction_failures VALUES(42,'provider',?1,81,'retry me',2,1200)",
-                    [&file.file.image_hash],
-                )
-                .unwrap();
-            connection
-                .execute(
-                    "INSERT INTO extraction_endpoints VALUES('provider',1200,1500,NULL)",
-                    [],
-                )
-                .unwrap();
-        }
-        drop(connection);
-        let before = std::fs::read(&legacy).unwrap();
-        let db = Database::open(&legacy).unwrap();
-        assert_eq!(
-            db.files().get(42).unwrap().text.as_deref(),
-            Some("migration coffee")
-        );
-        assert_eq!(
-            db.cache()
-                .get(&file.file.image_hash, "fixture/v1")
-                .unwrap()
-                .as_deref(),
-            Some("migration coffee")
-        );
-        assert_eq!(db.search().query("cofee", None, 10).unwrap().len(), 1);
-        if version == 4 {
-            let job = db.jobs().list(17).unwrap().remove(0);
-            assert_eq!(job.request_id, Some(81));
-            assert!(job.force);
-            assert!(db
-                .jobs()
-                .ready(&[17], "provider", 1199, &[], 8)
-                .unwrap()
-                .is_empty());
-            assert_eq!(
-                db.jobs()
-                    .ready(&[17], "provider", 1200, &[], 8)
-                    .unwrap()
-                    .len(),
-                1
-            );
-            let (failures, endpoint) = db.recovery().load("provider").unwrap();
-            assert_eq!(failures[0].attempts, 2);
-            assert_eq!(endpoint.next_request_ms, 1500);
-        } else {
-            assert!(db.jobs().list(17).unwrap().is_empty());
-        }
-        assert_eq!(before, std::fs::read(&legacy).unwrap());
-        drop(db);
-        assert_eq!(
-            Database::open(&legacy)
-                .unwrap()
-                .files()
-                .get(42)
-                .unwrap()
-                .text
-                .as_deref(),
-            Some("migration coffee")
-        );
-    }
-}
-
 #[test]
 fn crash_recovery_restores_synced_records_and_reclaims_abandoned_work() {
     use std::{
@@ -934,21 +904,6 @@ fn crash_recovery_restores_synced_records_and_reclaims_abandoned_work() {
     assert_eq!(db.folders().get(folder).unwrap().root_hash, "root");
     assert!(db.jobs().claim(&job, "new-session", 0, 2000).unwrap());
     assert!(!db.jobs().claim(&job, "another-session", 0, 2000).unwrap());
-}
-
-#[cfg(feature = "legacy-sqlite")]
-#[test]
-fn future_sqlite_schema_is_rejected_without_modifying_the_source() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("index.sqlite");
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute_batch("PRAGMA user_version=99; CREATE TABLE keep(value TEXT); INSERT INTO keep VALUES('untouched');").unwrap();
-    drop(connection);
-    let original = std::fs::read(&path).unwrap();
-    assert!(Database::open(&path).is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), original);
-    let store = super::store::Store::open(&path.with_extension("wedb")).unwrap();
-    assert!(store.get::<u32>("schema").unwrap().is_none());
 }
 
 #[test]
@@ -1163,59 +1118,4 @@ fn storage_scaling_probe() {
     let reopen = start.elapsed();
     assert_eq!(reopened.folders().get(folder).unwrap().image_count, count);
     println!("WeDB files={count} batch_ms={} literal_page_ms={} fuzzy_page_ms={} ready_8_us={} reopen_ms={}",write.as_millis(),literal.as_millis(),fuzzy_time.as_millis(),queue.as_micros(),reopen.as_millis());
-    #[cfg(feature = "legacy-sqlite")]
-    {
-        let mut connection =
-            rusqlite::Connection::open(temp.path().join("baseline.sqlite")).unwrap();
-        connection
-            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
-            .unwrap();
-        crate::adapters::wedb::migrations::apply(&connection).unwrap();
-        let start = Instant::now();
-        let transaction = connection.transaction().unwrap();
-        transaction
-            .execute(
-                "INSERT INTO folders(id,path,root_hash) VALUES(1,'images','root')",
-                [],
-            )
-            .unwrap();
-        {
-            let mut insert=transaction.prepare_cached("INSERT INTO files(folder_id,relative_path,image_hash,image_length,text_hash,record_hash,processor,text) VALUES(1,?1,?2,1,?3,?4,?5,?6)").unwrap();
-            let mut cache = transaction
-                .prepare_cached("INSERT INTO extraction_cache VALUES(?1,?2,?3)")
-                .unwrap();
-            for file in &files {
-                insert
-                    .execute(rusqlite::params![
-                        file.file.relative_path,
-                        file.file.image_hash,
-                        file.file.text_hash,
-                        file.file.record_hash,
-                        file.file.processor,
-                        file.text
-                    ])
-                    .unwrap();
-                cache
-                    .execute(rusqlite::params![
-                        file.file.image_hash,
-                        file.file.processor,
-                        file.text
-                    ])
-                    .unwrap();
-            }
-        }
-        transaction.commit().unwrap();
-        let write = start.elapsed();
-        let start = Instant::now();
-        let total: i64 = connection
-            .query_row(
-                "SELECT count(*) FROM files WHERE instr(lower(text),'coffee')>0",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(total, count as i64);
-        let literal = start.elapsed();
-        println!("SQLite files={count} batch_ms={} literal_count_ms={} (count only; not fuzzy or snippet parity)",write.as_millis(),literal.as_millis());
-    }
 }
