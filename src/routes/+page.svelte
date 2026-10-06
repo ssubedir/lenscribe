@@ -130,7 +130,7 @@
                 onclick={() => (model.message = "")}><Icon name="close" size={16} /></button
               >
             </div>{/if}
-          {#if model.draft && model.status}
+          {#if model.draft && model.status && model.client}
             <form id="settings-form" onsubmit={model.save} oninput={model.clearFeedback} novalidate>
               <fieldset disabled={model.busy !== null}>
                 {#if model.page === "overview"}
@@ -166,7 +166,7 @@
                     bind:fileTool={model.fileTool}
                   />
                 {:else if model.page === "general"}
-                  <General bind:draft={model.draft} />
+                  <General bind:draft={model.draft} client={model.client} />
                 {/if}
               </fieldset>
             </form>

@@ -1,7 +1,9 @@
 <script lang="ts">
   import Icon from "$lib/components/Icon.svelte";
   import type { Settings } from "$lib/generated/core";
-  let { draft = $bindable() }: { draft: Settings } = $props();
+  import type { AppClient } from "$lib/clients/types";
+  import Maintenance from "./Maintenance.svelte";
+  let { draft = $bindable(), client }: { draft: Settings; client: AppClient } = $props();
 </script>
 
 <section class="card">
@@ -55,6 +57,7 @@
   >
   <p class="hint">Resuming scans your folders for images added while paused.</p>
 </section>
+<Maintenance {client} />
 <section class="card">
   <h2>Always there, out of the way</h2>
   <p class="body-copy">
