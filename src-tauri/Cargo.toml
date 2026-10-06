@@ -1,6 +1,6 @@
 [package]
 name = "lenscribe"
-version = "0.1.3"
+version = "0.1.4"
 description = "A desktop image search app with appended text and Merkle tracking"
 authors = ["you"]
 edition = "2021"
