@@ -1,90 +1,153 @@
 import { expect, mock, test } from "bun:test";
-import { createUpdater } from "../src/lib/clients/updater";
-import type { DownloadEvent } from "@tauri-apps/plugin-updater";
+import { SettingsController } from "../src/lib/settings/controller.svelte";
+import { createPreviewClient } from "../src/lib/clients/preview";
+import type { UpdateStatus } from "../src/lib/clients/types";
 
-function fixture(failure?: "download" | "prepare" | "install") {
-  const order: string[] = [];
-  const record = async (stage: string) => {
-    order.push(stage);
-    if (failure === stage) throw new Error("Sensitive internal error");
+function available(revision = 1): UpdateStatus {
+  return {
+    revision,
+    supported: true,
+    supportMessage: null,
+    phase: "available",
+    available: { version: "0.2.0", notes: "Sample release" },
+    progress: null,
+    lastChecked: 123,
+    error: null,
   };
-  const update = {
-    version: "0.2.0",
-    body: "Release notes",
-    download: mock(async (onEvent: (event: DownloadEvent) => void) => {
-      onEvent({ event: "Started", data: { contentLength: 100 } });
-      onEvent({ event: "Progress", data: { chunkLength: 40 } });
-      await record("download");
-      onEvent({ event: "Finished" });
-    }),
-    install: mock(() => record("install")),
-    close: mock(async () => {
-      order.push("close");
-    }),
-  };
-  const dependencies = {
-    check: mock(async () => update),
-    prepare: mock(() => record("prepare")),
-    relaunch: mock(() => record("relaunch")),
-  };
-  return { update, dependencies, order, client: createUpdater(dependencies) };
 }
 
-test("update download and signature verification finish before monitoring stops", async () => {
-  const { client, order } = fixture();
-  expect(await client.checkUpdate()).toEqual({ version: "0.2.0", notes: "Release notes" });
-  const progress: (number | null)[] = [];
-  await client.installUpdate((percent) => progress.push(percent));
-  expect(progress).toEqual([0, 40, 100]);
-  expect(order).toEqual(["download", "prepare", "install", "relaunch", "close"]);
+test("background update events show the notice without checking from the UI", async () => {
+  const client = createPreviewClient();
+  const check = mock(client.checkUpdate);
+  let publish: (status: UpdateStatus) => void = () => {};
+  const model = new SettingsController();
+  model.start({
+    ...client,
+    checkUpdate: check,
+    onUpdate: async (callback) => {
+      publish = callback;
+      return () => {};
+    },
+  });
+  await model.refresh();
+  publish(available());
+  expect(model.update?.available?.version).toBe("0.2.0");
+  expect(check).not.toHaveBeenCalled();
+  publish({ ...available(2), phase: "downloading", progress: 40 });
+  expect(model.busy).toBe("update");
+  expect(model.update?.progress).toBe(40);
+  model.destroy();
 });
 
-test("a failed download or signature never stops monitoring or runs the installer", async () => {
-  const { client, order } = fixture("download");
-  await client.checkUpdate();
-  await expect(client.installUpdate(() => {})).rejects.toThrow("Monitoring is still running");
-  expect(order).toEqual(["download", "close"]);
-  await expect(client.installUpdate(() => {})).rejects.toThrow("Check for updates");
+test("older status responses cannot erase a newer update event", async () => {
+  const client = createPreviewClient();
+  const pending = Promise.withResolvers<UpdateStatus>();
+  let publish: (status: UpdateStatus) => void = () => {};
+  const model = new SettingsController();
+  model.start({
+    ...client,
+    updateStatus: () => pending.promise,
+    onUpdate: async (callback) => {
+      publish = callback;
+      return () => {};
+    },
+  });
+  publish(available(3));
+  pending.resolve({ ...available(1), available: null, phase: "idle" });
+  await model.refresh();
+  expect(model.update?.available?.version).toBe("0.2.0");
+  model.destroy();
 });
 
-test("failed shutdown or installation reports how to resume monitoring", async () => {
-  for (const stage of ["prepare", "install"] as const) {
-    const { client, dependencies } = fixture(stage);
-    await client.checkUpdate();
-    await expect(client.installUpdate(() => {})).rejects.toThrow("Restart Lenscribe");
-    expect(dependencies.relaunch).not.toHaveBeenCalled();
-  }
+test("unsaved settings block installation but allow checking", async () => {
+  const client = createPreviewClient();
+  const install = mock(client.installUpdate);
+  const model = new SettingsController();
+  model.start({ ...client, installUpdate: install });
+  await model.refresh();
+  if (!model.draft) throw new Error("Missing draft");
+  model.draft.theme = "dark";
+  await model.checkUpdate();
+  await model.installUpdate();
+  expect(model.update?.available).not.toBeNull();
+  expect(install).not.toHaveBeenCalled();
+  model.destroy();
 });
 
-test("a second check releases the old resource; shutdown releases late responses", async () => {
-  const { client, update, dependencies } = fixture();
-  await client.checkUpdate();
-  await client.checkUpdate();
-  expect(update.close).toHaveBeenCalledTimes(1);
-  const pending = Promise.withResolvers<typeof update>();
-  dependencies.check.mockImplementation(() => pending.promise);
-  const checking = client.checkUpdate();
-  await Promise.resolve();
-  await client.dispose?.();
-  pending.resolve(update);
-  expect(await checking).toBeNull();
-  expect(update.close).toHaveBeenCalledTimes(3);
-});
-
-test("overlapping checks or installs cannot replace the selected update", async () => {
-  const { client, update, dependencies } = fixture();
-  const pending = Promise.withResolvers<typeof update>();
-  dependencies.check.mockImplementation(() => pending.promise);
-  const checking = client.checkUpdate();
-  await expect(client.checkUpdate()).rejects.toThrow("already in progress");
-  await expect(client.installUpdate(() => {})).rejects.toThrow("Check for updates");
-  pending.resolve(update);
-  await checking;
-  const downloading = Promise.withResolvers<void>();
-  update.download.mockImplementation(() => downloading.promise);
-  const installing = client.installUpdate(() => {});
-  await expect(client.installUpdate(() => {})).rejects.toThrow("Check for updates");
-  await expect(client.checkUpdate()).rejects.toThrow("already in progress");
-  downloading.resolve();
+test("installation uses the advertised version and failure restores controls", async () => {
+  const client = createPreviewClient();
+  const pending = Promise.withResolvers<void>();
+  const install = mock((_version: string) => pending.promise);
+  const model = new SettingsController();
+  model.start({ ...client, installUpdate: install });
+  await model.refresh();
+  await model.checkUpdate();
+  const installing = model.installUpdate();
+  expect(model.busy).toBe("update");
+  expect(install).toHaveBeenCalledWith("0.2.0");
+  await model.refresh();
+  expect(model.busy).toBe("update");
+  model.navigate("folders");
+  expect(model.page).toBe("overview");
+  pending.reject(new Error("Monitoring has resumed"));
   await installing;
+  expect(model.busy).toBeNull();
+  expect(model.updateError).toContain("Monitoring has resumed");
+  expect(model.update?.available).not.toBeNull();
+  model.destroy();
+});
+
+test("destroy removes late update subscriptions and ignores their results", async () => {
+  const client = createPreviewClient();
+  const pending = Promise.withResolvers<() => void>();
+  let publish: (status: UpdateStatus) => void = () => {};
+  const remove = mock(() => {});
+  const model = new SettingsController();
+  model.start({
+    ...client,
+    onUpdate: (callback) => {
+      publish = callback;
+      return pending.promise;
+    },
+  });
+  model.destroy();
+  pending.resolve(remove);
+  publish(available());
+  await Promise.resolve();
+  expect(remove).toHaveBeenCalled();
+  expect(model.update).toBeNull();
+});
+
+test("preview updates remain isolated and clear the available update after simulation", async () => {
+  const model = new SettingsController();
+  model.start(createPreviewClient());
+  await model.refresh();
+  await model.checkUpdate();
+  await model.installUpdate();
+  expect(model.update?.available).toBeNull();
+  expect(model.busy).toBeNull();
+  expect(model.message).toContain("No update was installed");
+  model.destroy();
+});
+
+test("polling recovers update progress and failures if events are missed", async () => {
+  const client = createPreviewClient();
+  const daemonStatus = mock(client.status);
+  let remote = available();
+  const model = new SettingsController();
+  model.start({ ...client, status: daemonStatus, updateStatus: async () => remote });
+  await model.refresh();
+  remote = { ...available(2), phase: "downloading", progress: 40 };
+  await model.refresh();
+  expect(model.busy).toBe("update");
+  const calls = daemonStatus.mock.calls.length;
+  remote = { ...available(3), phase: "downloading", progress: 80 };
+  await model.refresh();
+  expect(model.update?.progress).toBe(80);
+  expect(daemonStatus.mock.calls.length).toBe(calls);
+  remote = { ...available(4), phase: "error", error: "Monitoring has resumed" };
+  await model.refresh();
+  expect(model.busy).toBeNull();
+  expect(model.update?.error).toContain("Monitoring has resumed");
+  model.destroy();
 });

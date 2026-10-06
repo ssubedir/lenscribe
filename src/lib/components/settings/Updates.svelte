@@ -1,104 +1,109 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
-  import type { AppClient, UpdateInfo } from "$lib/clients/types";
+  import Icon from "$lib/components/Icon.svelte";
+  import type { UpdateStatus } from "$lib/clients/types";
+  import { version } from "../../../../package.json";
+
   let {
-    client,
+    status,
+    error = "",
     dirty,
-    onInstalling,
-  }: { client: AppClient | null; dirty: boolean; onInstalling: (installing: boolean) => void } =
-    $props();
-  let available = $state<UpdateInfo | null>(null);
-  let busy = $state<"check" | "install" | null>(null);
-  let message = $state("");
-  let failed = $state(false);
-  let progress = $state<number | null>(null);
-  let alive = true;
-  onDestroy(() => {
-    alive = false;
-  });
-  async function check() {
-    if (!client || busy) return;
-    busy = "check";
-    message = "";
-    available = null;
-    failed = false;
-    try {
-      const result = await client.checkUpdate();
-      if (!alive) return;
-      available = result;
-      if (!result) message = "You’re using the latest version.";
-    } catch (error) {
-      if (alive) {
-        available = null;
-        message = String(error);
-        failed = true;
-      }
-    } finally {
-      if (alive) busy = null;
-    }
-  }
-  async function install() {
-    if (!client || busy || dirty || !available) return;
-    busy = "install";
-    progress = null;
-    onInstalling(true);
-    message = "Downloading and verifying update…";
-    failed = false;
-    try {
-      await client.installUpdate((percent) => {
-        if (alive) progress = percent;
-      });
-      if (alive)
-        message =
-          client.mode === "preview"
-            ? "Preview complete. No update was installed."
-            : "Update installed. Restarting Lenscribe…";
-    } catch (error) {
-      if (alive) {
-        available = null;
-        message = String(error);
-        failed = true;
-      }
-    } finally {
-      onInstalling(false);
-      if (alive) busy = null;
-    }
-  }
+    oncheck,
+    oninstall,
+  }: {
+    status: UpdateStatus | null;
+    error?: string;
+    dirty: boolean;
+    oncheck: () => void;
+    oninstall: () => void;
+  } = $props();
+  const busy = $derived(
+    status && ["downloading", "installing", "restarting"].includes(status.phase),
+  );
+  const message = $derived(
+    status?.phase === "downloading"
+      ? "Downloading and verifying update…"
+      : status?.phase === "installing"
+        ? "Installing update…"
+        : status?.phase === "restarting"
+          ? "Update installed. Restarting Lenscribe…"
+          : status?.phase === "checking"
+            ? "Checking for updates…"
+            : status?.available
+              ? `Version ${status.available.version} is ready to install`
+              : status?.lastChecked
+                ? "You’re using the latest version."
+                : "Checks automatically while Lenscribe runs.",
+  );
+  const lastChecked = $derived(
+    status?.lastChecked ? new Date(status.lastChecked * 1000).toLocaleString() : "",
+  );
 </script>
 
-<section class="card">
+<section class="card app-updates" aria-labelledby="updates-heading">
   <div class="section-heading">
-    <h2>App Updates</h2>
-    <button type="button" disabled={!client || busy !== null} onclick={check}
-      >{busy === "check" ? "Checking…" : "Check for Updates"}</button
-    >
-  </div>
-  <p class="hint">Check GitHub releases for a new version of Lenscribe.</p>
-  {#if available}
-    <div class="update-details">
-      <strong>Lenscribe v{available.version} is available</strong>
-      {#if available.notes}<details>
-          <summary>Release notes</summary>
-          <pre>{available.notes}</pre>
-        </details>{/if}
-      <button type="button" class="primary" disabled={busy !== null || dirty} onclick={install}
-        >{busy === "install" ? "Installing…" : "Download & Install"}</button
-      >
-      <p class="hint">
-        Lenscribe restarts after installation. Save or discard your settings changes first.
-      </p>
+    <div>
+      <h2 id="updates-heading" tabindex="-1">App Updates</h2>
+      <p class="hint">Lenscribe v{version} · Stable releases</p>
     </div>
-  {/if}
-  {#if busy === "install"}<progress
-      max="100"
-      value={progress ?? undefined}
-      aria-label="Update download progress"
-    ></progress>{/if}
-  {#if message}<p
-      class:danger={failed}
-      class="connection-feedback"
-      role={failed ? "alert" : "status"}
+    <button
+      type="button"
+      onclick={oncheck}
+      disabled={!status?.supported || busy || status.phase === "checking"}
     >
-      {message}
-    </p>{/if}
+      <Icon name="retry" size={15} />{status?.phase === "checking"
+        ? "Checking…"
+        : "Check for Updates"}
+    </button>
+  </div>
+  {#if status && !status.supported}
+    <p class="hint">{status.supportMessage}</p>
+  {:else}
+    <div
+      class="update-summary"
+      class:available={status?.available !== null && status?.available !== undefined}
+    >
+      <span class="update-icon"
+        ><Icon name={status?.available ? "download" : "check"} size={21} /></span
+      >
+      <div>
+        <strong role="status">{message}</strong>
+        <p class="hint">
+          {busy
+            ? "Lenscribe will restart after installation."
+            : lastChecked
+              ? `Last checked ${lastChecked}`
+              : "Updates are installed when you choose."}
+        </p>
+      </div>
+      {#if status?.available}
+        <button
+          type="button"
+          class="primary"
+          onclick={oninstall}
+          disabled={busy || dirty || status.phase === "checking"}
+        >
+          {busy ? "Updating…" : "Update & Restart"}<Icon name="arrow" size={16} />
+        </button>
+      {/if}
+    </div>
+    {#if busy}
+      <progress
+        max="100"
+        value={status?.progress ?? undefined}
+        aria-label="Update download progress"
+      ></progress>
+    {/if}
+    {#if status?.available?.notes}
+      <details class="update-release-notes">
+        <summary>What’s new in v{status.available.version}</summary>
+        <pre>{status.available.notes}</pre>
+      </details>
+    {/if}
+    {#if status?.available && dirty}<p class="hint">
+        Save or discard your settings changes before updating.
+      </p>{/if}
+    {#if error || status?.error}<p class="connection-feedback danger" role="alert">
+        {error || status?.error}
+      </p>{/if}
+  {/if}
 </section>

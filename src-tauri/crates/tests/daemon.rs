@@ -224,6 +224,74 @@ async fn saved_configuration_restores_watches_api_and_backlog_without_a_ui() {
 }
 
 #[tokio::test]
+async fn failed_install_recovery_restores_watches_api_and_forced_jobs_without_changing_settings() {
+    let (temporary, images, core, daemon) = setup();
+    daemon.start().await.unwrap();
+    let mut settings = configured(&images);
+    settings.api = ApiSettings {
+        enabled: true,
+        port: 0,
+    };
+    settings.start_minimized = true;
+    daemon.update_settings(settings.clone()).await.unwrap();
+    let file = core
+        .list_files(core.folders().unwrap()[0].id, "", 0)
+        .unwrap()
+        .files[0]
+        .clone();
+    core.attach_text(
+        file.folder_id,
+        &file.relative_path,
+        &file.image_hash,
+        "Keep this text",
+        "fixture/v1",
+    )
+    .unwrap();
+    core.queue_file(file.id, &file.image_hash, true).unwrap();
+    let saved = fs::read(temporary.path().join("settings.json")).unwrap();
+    daemon.shutdown().await.unwrap();
+    assert!(core.watch_status().unwrap().is_empty());
+    assert!(daemon.status().unwrap().api_url.is_none());
+    fs::write(
+        images.join("during-install.jpg"),
+        include_bytes!("fixtures/pixel.jpg"),
+    )
+    .unwrap();
+    let resumed = daemon.restart().await.unwrap();
+    assert_eq!(resumed.settings, settings);
+    assert_eq!(
+        fs::read(temporary.path().join("settings.json")).unwrap(),
+        saved
+    );
+    assert_eq!(resumed.watchers.len(), 1);
+    assert!(resumed.api_url.is_some());
+    assert_eq!(
+        core.file(file.id).unwrap().text.as_deref(),
+        Some("Keep this text")
+    );
+    assert!(daemon
+        .pending_images()
+        .unwrap()
+        .iter()
+        .any(|pending| pending.id == file.id));
+    assert_eq!(resumed.total_images, 2);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn installer_recovery_preserves_a_user_paused_monitor() {
+    let (_temporary, images, _core, daemon) = setup();
+    let mut settings = configured(&images);
+    settings.monitoring_paused = true;
+    daemon.update_settings(settings.clone()).await.unwrap();
+    daemon.shutdown().await.unwrap();
+    let resumed = daemon.restart().await.unwrap();
+    assert_eq!(resumed.settings, settings);
+    assert!(resumed.watchers.is_empty());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn pausing_keeps_backlog_and_resuming_discovers_images_saved_during_pause() {
     let (_temporary, images, core, daemon) = setup();
     daemon.start().await.unwrap();

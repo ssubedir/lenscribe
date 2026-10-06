@@ -15,6 +15,17 @@ export interface UpdateInfo {
   notes: string;
 }
 
+export interface UpdateStatus {
+  revision: number;
+  supported: boolean;
+  supportMessage: string | null;
+  phase: "idle" | "checking" | "available" | "downloading" | "installing" | "restarting" | "error";
+  available: UpdateInfo | null;
+  progress: number | null;
+  lastChecked: number | null;
+  error: string | null;
+}
+
 export interface AppClient {
   readonly mode: "desktop" | "preview";
   readonly pollInterval: number;
@@ -34,7 +45,9 @@ export interface AppClient {
   backupDatabase(path: string): Promise<void>;
   rebuildIndex(): Promise<MaintenanceReport>;
   cleanupCache(): Promise<number>;
-  checkUpdate(): Promise<UpdateInfo | null>;
-  installUpdate(onProgress: (percent: number | null) => void): Promise<void>;
+  updateStatus(): Promise<UpdateStatus>;
+  onUpdate(callback: (status: UpdateStatus) => void): Promise<() => void>;
+  checkUpdate(): Promise<UpdateStatus>;
+  installUpdate(version: string): Promise<void>;
   dispose?(): Promise<void>;
 }

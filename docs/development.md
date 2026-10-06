@@ -190,4 +190,19 @@ A failed run leaves a draft. Use **Re-run failed jobs**, or dispatch the same ta
 
 The workflow uses the automatic `GITHUB_TOKEN`; a separate GitHub token is not needed. Signed updater artifacts and a four-platform `latest.json` are built alongside installers. Publication validates their version, signatures, and download destinations. Missing or invalid updater artifacts keep the draft unpublished.
 
-The **App Updates** card is currently hidden. The updater code is retained, but users install updates through release installers. The configured future feed is `https://github.com/ssubedir/lenscribe/releases/latest/download/latest.json`; GitHub's latest-release feed follows stable releases.
+### In-app updates
+
+Installed release builds check `https://github.com/ssubedir/lenscribe/releases/latest/download/latest.json` 30 seconds after daemon startup, then every 24 hours while the process runs. These checks run in Rust and continue with the settings window hidden. Only stable versions are offered. Development builds make no update requests; the design preview simulates updates without network or desktop access.
+
+An available update appears beside the sidebar version. Clicking it opens **General → App Updates**, where users can check manually, read release notes, and choose **Update & Restart**. Unsaved settings must be saved or discarded before installation. Navigation from the file inspector keeps its existing unsaved-text guard.
+
+Downloads keep image processing running. The official plugin verifies the artifact signature and its signed version before shutdown. Installation then waits for daemon tasks and atomic writes, syncs the database, runs the installer off the UI thread, and restarts the app. Queue state is retained. Windows exits after launching its installer; macOS and AppImage installations restart after replacement. A download or signature failure leaves monitoring running. A shutdown or installer failure attempts to resume the daemon with its saved settings, including the user's paused preference, and reports when a manual restart is needed.
+
+Checks and installations share one native operation lock. Update state and progress are published to the UI with revision numbers; stale responses cannot erase a newer notice. Polling also retrieves state if an event is missed. Linux `.deb` installations direct users to package updates instead of replacing the installed executable with an AppImage.
+
+Before shipping updater changes, perform an installed-release smoke test on each supported platform:
+
+1. Install an older signed release with the same updater public key and a compatible signed feed, then publish a newer signed release.
+2. Hide the settings window, confirm the background check finds the release, then open the sidebar notice and its release notes.
+3. Confirm unsaved settings and inspector edits are preserved. Queue images or reprocessing, install the update, and verify the new version, saved configuration, text, local API, and remaining queue after restart.
+4. Interrupt a download and confirm monitoring continues and retry works. Automated tests separately cover tampering, signed-version mismatches, concurrent requests, shutdown failures, installer failures, and daemon recovery.

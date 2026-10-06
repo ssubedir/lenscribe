@@ -492,6 +492,14 @@ impl Daemon {
         }
         self.core.persist()
     }
+
+    /// Recover monitoring after a failed installer, retaining saved settings and queue state.
+    pub async fn restart(self: &Arc<Self>) -> Result<DaemonStatus> {
+        // Finish any partial shutdown before allowing new extraction work or watchers.
+        self.shutdown().await?;
+        self.stopped.store(false, Ordering::Relaxed);
+        self.start().await
+    }
 }
 
 impl Drop for Daemon {

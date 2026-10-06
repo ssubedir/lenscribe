@@ -2,17 +2,13 @@ import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import * as core from "$lib/core";
 import type { AppClient } from "./types";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { createUpdater } from "./updater";
 
 export function createDesktopClient(): AppClient {
   return {
-    ...createUpdater({
-      check: () => check({ timeout: 20000 }),
-      prepare: core.prepareUpdateInstall,
-      relaunch,
-    }),
+    updateStatus: core.appUpdateStatus,
+    onUpdate: core.onAppUpdate,
+    checkUpdate: core.checkAppUpdate,
+    installUpdate: core.installAppUpdate,
     mode: "desktop",
     pollInterval: 2000,
     status: core.daemonStatus,

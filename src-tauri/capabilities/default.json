@@ -11,10 +11,6 @@
     "core:window:allow-start-dragging",
     "opener:default",
     "dialog:allow-open",
-    "dialog:allow-save",
-    "updater:allow-check",
-    "updater:allow-download",
-    "updater:allow-install",
-    "process:allow-restart"
+    "dialog:allow-save"
   ]
 }

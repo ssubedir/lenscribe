@@ -41,6 +41,7 @@
 - **Lets you inspect, edit, and reprocess files** from the settings window.
 - **Keeps search and recovery local** with fuzzy matching, database backups, index rebuilds, and cache cleanup.
 - **Fits into a desktop workflow** with a system tray, start at login, and light/dark themes.
+- **Checks for signed updates** in the background and installs them when you choose.
 
 ## Install
 
@@ -55,7 +56,7 @@ Download a package for your platform from [GitHub Releases](https://github.com/s
 
 Windows installers are currently unsigned. macOS builds use ad-hoc signing and are not notarized. See the [release guide](docs/development.md#releases) for the current signing setup.
 
-This README describes the source tree. To use changes added since the latest release, [run or build from source](#development). Install newer releases through their installers; in-app updates are currently hidden.
+This README describes the source tree. To use changes added since the latest release, [run or build from source](#development). Installed release builds check for stable updates in the background. Use **General → App Updates** to check manually or update and restart; a sidebar notice appears when an update is available. Linux in-app updates are enabled for AppImage installations; update `.deb` packages through your package manager. Older builds without these controls can still use the release installers.
 
 ## Getting started
 

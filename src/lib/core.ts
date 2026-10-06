@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { UpdateStatus } from "$lib/clients/types";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -26,7 +27,12 @@ export const saveSettings = (settings: Settings) =>
 export const retryDaemon = () => invoke<DaemonStatus>("retry_daemon");
 export const discoverModels = (settings: ExtractionSettings) =>
   invoke<ModelCatalog>("discover_llm_models", { settings });
-export const prepareUpdateInstall = () => invoke<void>("prepare_update_install");
+export const appUpdateStatus = () => invoke<UpdateStatus>("app_update_status");
+export const checkAppUpdate = () => invoke<UpdateStatus>("check_app_update");
+export const installAppUpdate = (version: string) =>
+  invoke<void>("install_app_update", { version });
+export const onAppUpdate = (callback: (status: UpdateStatus) => void) =>
+  listen<UpdateStatus>("lenscribe://update", (event) => callback(event.payload));
 export const maintenanceStatus = () => invoke<MaintenanceStatus>("maintenance_status");
 export const backupDatabase = (path: string) => invoke<void>("backup_database", { path });
 export const rebuildIndex = () => invoke<MaintenanceReport>("rebuild_index");

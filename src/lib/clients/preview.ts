@@ -1,6 +1,6 @@
 // Imported only by the explicit development preview. No desktop or network access.
 import type { FileDetails, FileRecord } from "../generated/core";
-import type { AppClient } from "./types";
+import type { AppClient, UpdateStatus } from "./types";
 import { applyPreviewSettings, createPreviewStatus } from "./fixtures";
 import { previewSearchRank } from "./preview-search";
 
@@ -49,6 +49,22 @@ export function createPreviewClient(): AppClient {
     revision = 0;
   const folders = new Map<number, FileDetails[]>();
   let unusedCache = 12;
+  let update: UpdateStatus = {
+    revision: 0,
+    supported: true,
+    supportMessage: null,
+    phase: "idle",
+    available: null,
+    progress: null,
+    lastChecked: null,
+    error: null,
+  };
+  const updateListeners = new Set<(status: UpdateStatus) => void>();
+  const publishUpdate = (change: Partial<UpdateStatus>) => {
+    update = { ...update, ...change, revision: update.revision + 1 };
+    for (const listener of updateListeners) listener(structuredClone(update));
+    return structuredClone(update);
+  };
   const files = (folderId: number) => {
     if (!folders.has(folderId)) folders.set(folderId, sampleFiles(folderId));
     return folders.get(folderId)!;
@@ -83,10 +99,26 @@ export function createPreviewClient(): AppClient {
       };
     },
     async checkUpdate() {
-      return { version: "0.2.0", notes: "Preview release. No update will be downloaded." };
+      return publishUpdate({
+        phase: "available",
+        lastChecked: Math.floor(Date.now() / 1000),
+        available: { version: "0.2.0", notes: "Preview release. No update will be downloaded." },
+      });
     },
-    async installUpdate(onProgress) {
-      onProgress(100);
+    async updateStatus() {
+      return structuredClone(update);
+    },
+    async onUpdate(callback) {
+      updateListeners.add(callback);
+      return () => {
+        updateListeners.delete(callback);
+      };
+    },
+    async installUpdate(version) {
+      if (version !== update.available?.version) throw new Error("Check for updates first.");
+      publishUpdate({ phase: "downloading", progress: 40 });
+      publishUpdate({ phase: "installing", progress: 100 });
+      publishUpdate({ phase: "idle", available: null, progress: null });
     },
     async chooseFolder() {
       return "";

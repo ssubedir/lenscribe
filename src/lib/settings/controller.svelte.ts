@@ -1,5 +1,5 @@
 import { tick } from "svelte";
-import type { AppClient } from "$lib/clients/types";
+import type { AppClient, UpdateStatus } from "$lib/clients/types";
 import type { DaemonStatus, Settings } from "$lib/generated/core";
 import { validateSettings } from "./validation";
 import { rememberConnection } from "./providers";
@@ -18,12 +18,16 @@ export class SettingsController {
   fileTool = $state("grep");
   inspecting = $state<Inspection | null>(null);
   client = $state.raw<AppClient | null>(null);
+  update = $state<UpdateStatus | null>(null);
+  updateError = $state("");
   dirty = $derived(
     this.draft !== null && JSON.stringify(this.draft) !== JSON.stringify(this.status?.settings),
   );
   private version = 0;
   private alive = true;
   private cleanup: (() => void) | undefined;
+  private updateCleanup: (() => void) | undefined;
+  private installPending = false;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   start(client: AppClient) {
@@ -43,6 +47,15 @@ export class SettingsController {
       .catch((cause) => {
         if (this.alive) this.connectionError = String(cause);
       });
+    void client
+      .onUpdate((status) => this.acceptUpdate(status))
+      .then((remove) => {
+        if (this.alive) this.updateCleanup = remove;
+        else remove();
+      })
+      .catch(() => {
+        // Polling also reads update state when the event connection is unavailable.
+      });
   }
 
   destroy() {
@@ -50,6 +63,7 @@ export class SettingsController {
     this.version++;
     clearInterval(this.timer);
     this.cleanup?.();
+    this.updateCleanup?.();
     void this.client?.dispose?.().catch(() => {});
   }
   navigate = (page: Page) => {
@@ -80,13 +94,79 @@ export class SettingsController {
     this.busy = installing ? "update" : null;
   };
 
+  private acceptUpdate(next: UpdateStatus) {
+    if (!this.alive || (this.update && next.revision < this.update.revision)) return;
+    this.update = next;
+    const installing = ["downloading", "installing", "restarting"].includes(next.phase);
+    if (installing && this.busy !== "update") this.updateInstalling(true);
+    else if (!installing && this.busy === "update" && !this.installPending)
+      this.updateInstalling(false);
+  }
+
+  checkUpdate = async () => {
+    if (!this.client || this.busy || this.update?.phase === "checking") return;
+    this.updateError = "";
+    try {
+      this.acceptUpdate(await this.client.checkUpdate());
+    } catch (cause) {
+      if (this.alive) this.updateError = String(cause);
+    }
+  };
+
+  installUpdate = async () => {
+    if (
+      !this.client ||
+      this.busy ||
+      this.dirty ||
+      !this.update?.supported ||
+      !this.update.available ||
+      this.update.phase === "checking"
+    )
+      return;
+    this.updateError = "";
+    const version = this.update.available.version;
+    this.installPending = true;
+    this.updateInstalling(true);
+    try {
+      await this.client.installUpdate(version);
+      if (this.alive && this.client.mode === "preview")
+        this.message = "Preview complete. No update was installed.";
+    } catch (cause) {
+      if (this.alive) this.updateError = String(cause);
+    } finally {
+      this.installPending = false;
+      // Installation is owned by Rust and continues if this view is destroyed.
+      if (this.alive) {
+        try {
+          this.acceptUpdate(await this.client.updateStatus());
+        } catch {
+          this.updateInstalling(false);
+        }
+      }
+    }
+  };
+
   refresh = async () => {
-    if (this.busy || !this.client) return;
+    if (!this.client) return;
+    if (this.busy) {
+      if (this.busy === "update") {
+        try {
+          this.acceptUpdate(await this.client.updateStatus());
+        } catch {
+          /* Retry on the next poll. */
+        }
+      }
+      return;
+    }
     const version = ++this.version;
     try {
-      const next = await this.client.status();
+      const [next, update] = await Promise.all([
+        this.client.status(),
+        this.client.updateStatus().catch(() => null),
+      ]);
       if (!this.alive || version !== this.version) return;
       this.accept(next, this.dirty);
+      if (update) this.acceptUpdate(update);
       this.connectionError = "";
     } catch (cause) {
       if (this.alive && version === this.version) this.connectionError = String(cause);

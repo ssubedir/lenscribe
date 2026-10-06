@@ -24,8 +24,16 @@
   let inspector = $state<{ requestLeave: (leave?: () => void) => void }>();
   const activePage = $derived(pages.find((entry) => entry.id === model.page)!);
 
-  function navigate(page: Page) {
-    const leave = () => model.navigate(page);
+  function navigate(page: Page, focus?: string) {
+    const leave = () => {
+      model.navigate(page);
+      if (focus)
+        void tick().then(() => {
+          const element = document.getElementById(focus);
+          element?.scrollIntoView({ block: "center" });
+          element?.focus({ preventScroll: true });
+        });
+    };
     if (model.inspecting && inspector) inspector.requestLeave(leave);
     else leave();
   }
@@ -103,6 +111,21 @@
           {/each}
         </nav>
         <div class="sidebar-bottom">
+          {#if model.update?.available}
+            <button
+              type="button"
+              class="update-notice"
+              aria-label="Update available"
+              disabled={model.busy === "update"}
+              onclick={() => navigate("general", "updates-heading")}
+              title={`Lenscribe v${model.update.available.version} is available`}
+            >
+              <Icon name="download" size={16} /><span>Update available</span><Icon
+                name="arrow"
+                size={14}
+              />
+            </button>
+          {/if}
           <span class="version"><span class="version-brand">LENSCRIBE · </span>v{appVersion}</span>
         </div>
       </aside>
@@ -205,7 +228,15 @@
                       bind:fileTool={model.fileTool}
                     />
                   {:else if model.page === "general"}
-                    <General bind:draft={model.draft} client={model.client} />
+                    <General
+                      bind:draft={model.draft}
+                      client={model.client}
+                      update={model.update}
+                      updateError={model.updateError}
+                      dirty={model.dirty}
+                      onCheckUpdate={model.checkUpdate}
+                      onInstallUpdate={model.installUpdate}
+                    />
                   {/if}
                 </fieldset>
               </form>{/if}

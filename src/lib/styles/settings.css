@@ -120,6 +120,22 @@
   .version-brand {
     margin-right: 5px;
   }
+  .update-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 14px;
+    padding: 10px;
+    background: var(--accent-soft, #edf3e9);
+    color: var(--accent-text, #39705b);
+    border-color: var(--border-accent, #cbdac6);
+    font-size: var(--font-size-sm);
+  }
+  .update-notice span {
+    flex: 1;
+    text-align: left;
+  }
   .workspace {
     min-width: 0;
     flex: 1;
@@ -1009,8 +1025,15 @@
     }
     .brand > span:last-child,
     .nav-caption,
-    nav button > span {
+    nav button > span,
+    .update-notice span,
+    .update-notice svg:last-child {
       display: none;
+    }
+    .update-notice {
+      width: 36px;
+      padding: 9px;
+      justify-content: center;
     }
     nav {
       margin-top: 32px;
@@ -1125,17 +1148,66 @@
   background: var(--danger-bg, #fbefeb);
   color: var(--danger, #a84435);
 }
-.update-details {
-  display: grid;
+.app-updates .section-heading .hint {
+  margin: 5px 0 0;
+}
+.update-summary {
+  display: flex;
+  align-items: center;
   gap: 14px;
-  margin-top: 20px;
+  padding: 18px 0;
 }
-.update-details button {
-  justify-self: start;
+.update-summary > div {
+  flex: 1;
+  min-width: 0;
 }
-.update-details pre {
+.update-summary strong {
+  font-size: var(--font-size-md);
+}
+.update-summary .hint {
+  margin: 5px 0 0;
+}
+.update-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--surface-soft, #f3f6f0);
+  color: var(--muted, #65766d);
+  flex-shrink: 0;
+}
+.update-summary.available .update-icon {
+  background: var(--accent-soft, #edf3e9);
+  color: var(--accent-text, #39705b);
+}
+.update-release-notes {
+  border-top: 1px solid var(--border-soft, #e8eee5);
+  padding-top: 14px;
+}
+.update-release-notes summary {
+  cursor: pointer;
+  color: var(--accent-text, #39705b);
+  font-size: var(--font-size-sm);
+}
+.update-release-notes pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
   line-height: 1.6;
+}
+@media (max-width: 760px) {
+  .app-updates .section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .update-summary {
+    flex-wrap: wrap;
+  }
+  .update-summary > div {
+    flex-basis: calc(100% - 60px);
+  }
+  .update-summary > button {
+    margin-left: 56px;
+  }
 }

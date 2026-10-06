@@ -344,12 +344,3 @@ pub async fn discover_llm_models(
         .await
         .map_err(|error| error.message)
 }
-
-#[tauri::command]
-pub async fn prepare_update_install(state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .daemon
-        .shutdown()
-        .await
-        .map_err(|error| error.to_string())
-}

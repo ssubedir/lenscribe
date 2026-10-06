@@ -2,6 +2,7 @@ mod commands;
 mod logging;
 #[cfg(test)]
 mod updater_tests;
+mod updates;
 
 use std::sync::Arc;
 
@@ -38,6 +39,9 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "settings" => show_settings(app),
             "pause" => {
+                if app.state::<Arc<updates::Updates>>().installing() {
+                    return;
+                }
                 let daemon = app.state::<commands::AppState>().daemon.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -118,6 +122,8 @@ pub fn run() {
                 core,
                 daemon: daemon.clone(),
             });
+            let updates = updates::create(app.handle(), daemon.clone());
+            app.manage(updates.clone());
             setup_tray(app)?;
             if !start_minimized {
                 show_settings(app.handle());
@@ -126,6 +132,12 @@ pub fn run() {
                 if let Err(error) = daemon.start().await {
                     log::error!("Cannot start Lenscribe daemon: {error}");
                 }
+                updates
+                    .run_background(
+                        std::time::Duration::from_secs(30),
+                        std::time::Duration::from_secs(24 * 60 * 60),
+                    )
+                    .await;
             });
             Ok(())
         })
@@ -161,7 +173,9 @@ pub fn run() {
             commands::queue_file,
             commands::edit_file,
             commands::discover_llm_models,
-            commands::prepare_update_install,
+            updates::app_update_status,
+            updates::check_app_update,
+            updates::install_app_update,
         ])
         .build(tauri::generate_context!());
     let app = match app {

@@ -91,7 +91,7 @@ test("the inspector opens under Watched Folders and navigation preserves setting
   model.destroy();
 });
 
-test("installing an update blocks settings, retries, navigation and polling", async () => {
+test("installing an update blocks settings, retries, navigation and daemon polling", async () => {
   const client = createPreviewClient();
   const model = new SettingsController();
   model.start(client);
