@@ -37,6 +37,10 @@ bun run tauri build --no-bundle
 
 Installer builds use `bun run tauri build` and require the matching updater signing key described in [Releases](#releases), because the project enables signed updater artifacts. Installer outputs are under `src-tauri/target/release/bundle/`.
 
+Use the default `src-tauri/target/` directory for local builds and checks so dependencies share one cache. Development and test builds retain limited debug information for workspace code, omit dependency debug symbols, and disable incremental compilation to reduce disk usage. Recompiling changed workspace code can take longer. For a debugging session that needs full symbols, override these settings locally.
+
+To remove generated build files, stop native builds and the development app, then run `cargo clean --manifest-path src-tauri/Cargo.toml`. This removes the build cache and generated executables and installers; the next native build recreates them.
+
 ## Checks
 
 The [CI workflow](../.github/workflows/ci.yml) runs manually. From a pull request's conversation page, post a new comment containing only `/ci`. Repository maintainers with write access can use this command; it tests the PR's current head commit, including PRs from forks, and reports a **CI / Manual PR** status on that commit with a link to the run. Each new `/ci` comment resolves the latest commit, and all jobs in that run test the same pinned commit. Post `/ci` again after pushing changes. The command becomes available after this workflow is merged into the default branch. Opening a PR or pushing commits does not start CI automatically.

@@ -3,7 +3,6 @@ node_modules
 /build
 /.svelte-kit
 .lenscribe/
-/src-tauri/target-wedb/
 .release-signing/
 /package
 .env
