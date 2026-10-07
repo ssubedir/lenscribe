@@ -66,7 +66,7 @@ body:
     id: logs
     attributes:
       label: Relevant logs
-      description: Paste the relevant sanitized lines from lenscribe.log. Log locations are in docs/development.md.
+      description: Paste the relevant sanitized lines from lenscribe.log. See [log locations](https://github.com/ssubedir/lenscribe/blob/main/CONTRIBUTING.md#logs).
       render: text
   - type: textarea
     id: context

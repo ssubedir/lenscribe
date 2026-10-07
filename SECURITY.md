@@ -21,6 +21,6 @@ Maintainers will review the report, ask for clarification where needed, and coor
 
 ## Data handling
 
-Lenscribe sends original image bytes to the selected model provider when extraction is enabled. Saved API keys are plain text in local settings, and extracted text is stored in image trailers and the local database. The optional search API is unauthenticated and bound to loopback. These behaviors are documented in [Data and privacy](README.md#data-and-privacy) and [architecture](docs/architecture.md).
+Lenscribe sends original image bytes to the selected model provider when extraction is enabled. Saved API keys are plain text in local settings, and extracted text is stored in image trailers and the local database. The optional search API is unauthenticated and bound to loopback. See [Data and privacy](README.md#data-and-privacy).
 
 Keep real API keys, private images, extracted text, and updater signing keys out of reports. Use sample files where possible. Ordinary extraction mistakes and feature requests belong in [public issues](https://github.com/ssubedir/lenscribe/issues); unintended access, disclosure, or changes to data should be reported privately.

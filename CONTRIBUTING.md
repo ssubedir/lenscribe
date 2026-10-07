@@ -1,50 +1,63 @@
 # Contributing to Lenscribe
 
-Bug reports, documentation, UI improvements, and code contributions are welcome. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+Bug reports, documentation, UI improvements, and code contributions are welcome.
 
 ## Issues and feature requests
 
-Search [existing issues](https://github.com/ssubedir/lenscribe/issues) before opening a new one, then choose the bug report or feature request template. For bugs, include your Lenscribe version, OS, steps to reproduce, expected behavior, and relevant log lines. The [development guide](docs/development.md#logs-and-troubleshooting) explains where to find logs.
+Search [existing issues](https://github.com/ssubedir/lenscribe/issues) before opening a new one. For bugs, include your Lenscribe version, OS, reproduction steps, expected behavior, and relevant sanitized [logs](#logs). Discuss substantial changes in an issue before implementation.
 
-Use synthetic images or examples you have permission to share. Remove API keys, private paths, image contents, and extracted text from public reports when they contain sensitive information. Report security vulnerabilities privately using the [security policy](SECURITY.md).
-
-For substantial changes, start with an issue explaining the problem and proposed approach so maintainers can discuss the scope before implementation.
+Use sample images you can share and leave private data out of reports. Report vulnerabilities through the [security policy](SECURITY.md).
 
 ## Set up the project
 
-Fork the repository, clone your fork, and create a branch for your change. Install the Bun version declared in `package.json`, stable Rust, and your platform's [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-
-From the repository root:
+Install [Bun](https://bun.sh/docs/installation) using the version in `package.json`, [stable Rust](https://rust-lang.org/tools/install/), and your platform's [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Clone the repository, or your fork when contributing:
 
 ```sh
+git clone https://github.com/ssubedir/lenscribe.git
+cd lenscribe
 bun install --frozen-lockfile
 bun run tauri dev
 ```
 
-For frontend work with sample data, use `bun run dev` and open `http://127.0.0.1:1420/?preview`. See the [development guide](docs/development.md) for setup, builds, and the headless runner, and [architecture](docs/architecture.md) for the code layout and processing behavior.
+For UI work with sample data, run `bun run dev` and open `http://127.0.0.1:1420/?preview`. Build an executable without installer signing with `bun run tauri build --no-bundle`. Cargo uses `src-tauri/target/`; stop native builds before running `cargo clean --manifest-path src-tauri/Cargo.toml` to clear it.
 
 ## Make and check your changes
 
-Keep each pull request focused on one problem. Match the existing Rust, Svelte, and TypeScript conventions, and add regression coverage for fixes or tests for changed behavior. Update documentation when setup, user behavior, or APIs change.
+Keep pull requests focused and add meaningful tests for changed behavior. Preserve original image bytes, durable processing, and protection against stale results. Keep domain policies, application workflows, ports, and adapters separate. Storage and file-format changes need explicit compatibility handling.
 
-Preserve original image bytes, transaction boundaries, and protection against stale extraction results. Put business values and policies in `domain`, workflows in `application`, I/O contracts in `ports`, and external integrations in `adapters`. Keep concrete wiring in `composition` or `runtime`, and provider requests and credentials inside adapters. WeDB schema changes need explicit versioning and upgrade handling.
-
-Rust DTOs define the frontend contract. After changing serialized types, run `bun run types:generate` and include the generated changes; do not edit `src/lib/generated/core.ts` by hand.
-
-Run the relevant [development checks](docs/development.md#checks) before submitting. Provider tests use local mock servers and do not require real API keys. Documentation-only changes need formatting and link checks; they do not need the app's runtime test suites.
-
-To check documentation formatting:
+After changing Rust DTOs, run `bun run types:generate`; do not edit `src/lib/generated/core.ts` by hand. Run the relevant checks from the repository root:
 
 ```sh
-bunx prettier --check "*.md" docs .github
+bun run check
+bun run test
+bun run format:check
+bunx prettier --check "*.md" .github
+bun run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-features --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
 ```
 
-Use `bun run format` for frontend code and workflow files, and `cargo fmt --manifest-path src-tauri/Cargo.toml --all` for Rust. Keep Markdown paragraphs on one source line, following the existing `proseWrap: never` setting.
+Provider tests use local mock servers and need no real API keys. Documentation-only changes need formatting and link checks. Keep Markdown paragraphs on one source line.
 
 ## Submit a pull request
 
-Open a pull request against `main`. Explain the problem, resulting behavior, and validation performed. Link the relevant issue and include screenshots for visible UI changes, using sample data. Note compatibility changes or database migrations, and say which checks you could not run.
+Open a pull request against `main` describing the problem, resulting behavior, and validation. Include sample-data screenshots for UI changes and note compatibility changes or checks you could not run.
 
-CI runs manually. A maintainer with repository write access can post `/ci` as a new comment on a pull request's conversation page to test its latest commit. Results appear as **CI / Manual PR** with a link to the run. Use a new `/ci` comment after pushing changes. Maintainers can also start **Actions → CI → Run workflow** on a repository branch. Opening a pull request or pushing commits does not start checks automatically.
+CI runs manually: maintainers with write access can post `/ci` as a new PR comment after each update, or use **Actions → CI → Run workflow** for a branch.
+
+## Logs
+
+Desktop diagnostics are written to `lenscribe.log`. Remove private paths and data before sharing:
+
+- Windows: `%LOCALAPPDATA%\com.ssubedir.lenscribe\logs\lenscribe.log`
+- Linux: `$XDG_DATA_HOME/com.ssubedir.lenscribe/logs/lenscribe.log`, falling back to `~/.local/share/com.ssubedir.lenscribe/logs/lenscribe.log`
+- macOS: `~/Library/Logs/com.ssubedir.lenscribe/lenscribe.log`
+
+## Releases
+
+Maintainers run **Actions → Release bump → Run workflow** with a version such as `0.1.5`, then **Actions → Release → Run workflow** with the matching tag, `v0.1.5`. The workflows commit the bump, create the tag, build packages, and publish after validation.
+
+Set the repository secret `TAURI_SIGNING_PRIVATE_KEY` to the updater key matching the public key in `src-tauri/tauri.conf.json`, plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if password-protected. Keep the private key backed up outside Git; changing the trusted public key requires a migration plan for existing installations.
 
 Contributions are provided under the project's [MIT license](LICENSE).
